@@ -1,3 +1,4 @@
 requests
 beautifulsoup4
 google-genai
+rumps; sys_platform == "darwin"

@@ -431,6 +431,7 @@ def render_html(day_str, available, data, generating=False):
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AI 데일리 브리핑 · {day_str}</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMDI0IiBoZWlnaHQ9IjEwMjQiIHZpZXdCb3g9IjAgMCAxMDI0IDEwMjQiPgogIDxkZWZzPgogICAgPGxpbmVhckdyYWRpZW50IGlkPSJiZyIgeDE9IjAiIHkxPSIwIiB4Mj0iMCIgeTI9IjEiPgogICAgICA8c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiNmZmZkZjgiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjZWZlN2Q2Ii8+CiAgICA8L2xpbmVhckdyYWRpZW50PgogICAgPGxpbmVhckdyYWRpZW50IGlkPSJsZXR0ZXIiIHgxPSIwIiB5MT0iMCIgeDI9IjAiIHkyPSIxIj4KICAgICAgPHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjM2Q2ZDljIi8+CiAgICAgIDxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzI1NGE3MCIvPgogICAgPC9saW5lYXJHcmFkaWVudD4KICAgIDxyYWRpYWxHcmFkaWVudCBpZD0iZG90IiBjeD0iMC4zNSIgY3k9IjAuMyIgcj0iMC44Ij4KICAgICAgPHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjZmZiMzdhIi8+CiAgICAgIDxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iI2UwNzkzYSIvPgogICAgPC9yYWRpYWxHcmFkaWVudD4KICA8L2RlZnM+CgogIDxyZWN0IHg9IjY0IiB5PSI2NCIgd2lkdGg9Ijg5NiIgaGVpZ2h0PSI4OTYiIHJ4PSIyMTAiIGZpbGw9InVybCgjYmcpIi8+CiAgPHJlY3QgeD0iNjQiIHk9IjY0IiB3aWR0aD0iODk2IiBoZWlnaHQ9Ijg5NiIgcng9IjIxMCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjZTZlMGQyIiBzdHJva2Utd2lkdGg9IjYiLz4KCiAgPCEtLSBpdGFsaWMgc2VyaWYgIkEiIG1vbm9ncmFtIC0tPgogIDx0ZXh0IHg9IjQ3MiIgeT0iNzAwIiBmb250LWZhbWlseT0iR2VvcmdpYSwgJ0lvd2FuIE9sZCBTdHlsZScsICdQYWxhdGlubyBMaW5vdHlwZScsIHNlcmlmIgogICAgICAgIGZvbnQtc3R5bGU9Iml0YWxpYyIgZm9udC13ZWlnaHQ9IjcwMCIgZm9udC1zaXplPSI2MjAiCiAgICAgICAgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0idXJsKCNsZXR0ZXIpIj5BPC90ZXh0PgoKICA8IS0tIGxpdmUvYnJvYWRjYXN0IGFjY2VudCBkb3QgLS0+CiAgPGNpcmNsZSBjeD0iNzQwIiBjeT0iMzMwIiByPSI1NCIgZmlsbD0idXJsKCNkb3QpIi8+CiAgPGNpcmNsZSBjeD0iNzQwIiBjeT0iMzMwIiByPSI1NCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjZmZmZGY4IiBzdHJva2Utd2lkdGg9IjEwIi8+Cjwvc3ZnPgo=">
 {refresh_tag}
 <style>
   :root {{
@@ -612,7 +613,8 @@ def _daily_autogen_loop():
             print(f"자동 생성 체크 중 오류(다음 주기에 재시도): {e}")
 
 
-if __name__ == "__main__":
+def main():
+    """서버를 이 프로세스/스레드에서 블로킹으로 띄운다 (CLI 직접 실행 및 메뉴바 앱에서 공용)."""
     if not API_KEY:
         print("경고: GOOGLE_API_KEY가 설정되지 않았습니다. .env에 GOOGLE_API_KEY=... 를 넣어주세요.")
     print(f"http://localhost:{PORT} 에서 서비스 중 (오늘자 캐시가 없으면 서버 켜지는 즉시 자동 생성 시작, "
@@ -620,3 +622,7 @@ if __name__ == "__main__":
     ensure_today_cache_started()  # 접속 안 해도 서버 켜지자마자 바로 생성 시작
     threading.Thread(target=_daily_autogen_loop, daemon=True).start()
     ThreadingHTTPServer(("localhost", PORT), Handler).serve_forever()
+
+
+if __name__ == "__main__":
+    main()
