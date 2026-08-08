@@ -201,6 +201,18 @@ def select_ai_related(items, n=PICK_N):
             picked.append(items[idx])
         if len(picked) >= n:
             break
+
+    # Gemini가 가끔 유효한 번호를 n개보다 적게 줌(중복/범위밖 번호를 섞어 답하거나 그냥
+    # 짧게 답함) -> 그대로 두면 섹션이 5개 이하로 쪼그라듦. 원래 목록 순서대로 아직 안
+    # 뽑힌 나머지로 채워서 후보가 있는 한 항상 n개를 채운다.
+    if len(picked) < n:
+        for i, it in enumerate(items):
+            if i not in seen:
+                picked.append(it)
+                seen.add(i)
+            if len(picked) >= n:
+                break
+
     return picked or items[:n]
 
 
