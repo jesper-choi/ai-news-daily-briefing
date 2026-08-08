@@ -352,6 +352,10 @@ def ensure_today_cache_started(force=False):
     return None
 
 
+def is_generating():
+    return _generating
+
+
 def paragraphs_html(text):
     """빈 줄로 구분된 텍스트를 <p> 태그들로 변환 (내용은 escape)."""
     parts = [html.escape(p.strip()) for p in re.split(r"\n\s*\n", text) if p.strip()]
@@ -371,13 +375,14 @@ def date_picker_html(selected, available):
     return f"""<select class="date-picker" onchange="location.href='/?date='+this.value">{options}</select>"""
 
 
-def render_html(day_str, available, data, generating=False):
+def render_html(day_str, available, data, generating=False, regenerating=False):
     refresh_tag = '<meta http-equiv="refresh" content="6">' if generating else ""
     if generating:
-        body = """
+        title = "다시 생성하고 있어요…" if regenerating else "오늘의 브리핑을 만들고 있어요…"
+        body = f"""
         <div class="generating">
           <div class="pulse-dots"><span></span><span></span><span></span></div>
-          <p>오늘의 브리핑을 만들고 있어요…</p>
+          <p>{title}</p>
           <p class="hint">GeekNews · Hacker News를 훑어서 AI 관련 기사를 고르고 있어요.<br>보통 3~6분 걸려요. 이 페이지는 6초마다 자동으로 새로고침돼요.</p>
         </div>"""
         item_count, generated_at = 0, ""
@@ -588,9 +593,14 @@ class Handler(BaseHTTPRequestHandler):
             data = ensure_today_cache_started()  # non-blocking: None while still generating
         else:
             data = load_cache_for_date(day_str)
-        generating = data is None and day_str == today_str
+        # is_generating()도 확인해야 하는 이유: 재생성 중엔 새 캐시가 저장되기 전까지 옛
+        # 캐시가 그대로 남아있어서 data가 None이 아님 -> data is None만 보면 재생성 중인데도
+        # "생성 중" 표시가 안 뜨고 그냥 옛 페이지가 그대로 보여서 눌렀는지 알 수 없었음.
+        generating = day_str == today_str and (data is None or is_generating())
 
-        out = render_html(day_str, available_dates(), data, generating=generating).encode("utf-8")
+        out = render_html(
+            day_str, available_dates(), data, generating=generating, regenerating=generating and data is not None
+        ).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(out)))
