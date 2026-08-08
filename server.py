@@ -435,7 +435,7 @@ def render_html(day_str, available, data, generating=False, regenerating=False):
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AI 데일리 브리핑 · {day_str}</title>
+<title>AI Daily Briefing · {day_str}</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2NCIgaGVpZ2h0PSI2NCIgdmlld0JveD0iMCAwIDY0IDY0Ij4KPHJlY3QgeD0iMyIgeT0iMyIgd2lkdGg9IjU4IiBoZWlnaHQ9IjU4IiByeD0iMTQiIGZpbGw9IiNmZmZkZjgiIHN0cm9rZT0iI2U2ZTBkMiIgc3Ryb2tlLXdpZHRoPSIyIi8+Cjx0ZXh0IHg9IjI3IiB5PSI0NiIgZm9udC1mYW1pbHk9Ikdlb3JnaWEsICdJb3dhbiBPbGQgU3R5bGUnLCAnUGFsYXRpbm8gTGlub3R5cGUnLCBzZXJpZiIgZm9udC1zdHlsZT0iaXRhbGljIiBmb250LXdlaWdodD0iNzAwIiBmb250LXNpemU9IjQwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjMmY1ZDhhIj5BPC90ZXh0Pgo8Y2lyY2xlIGN4PSI0NSIgY3k9IjE2IiByPSI1IiBmaWxsPSIjZTA3OTNhIi8+Cjwvc3ZnPgo=">
 {refresh_tag}
 <style>
@@ -559,7 +559,7 @@ def render_html(day_str, available, data, generating=False, regenerating=False):
         {f'<a class="btn-regenerate" href="/?date={day_str}&regenerate=1">↻ 다시 생성</a>' if day_str == date.today().isoformat() and not generating else ""}
       </div>
     </div>
-    <h1>AI 데일리 브리핑</h1>
+    <h1>AI Daily Briefing</h1>
     <p>{day_str}{f' · 총 {item_count}개 · {generated_at} 생성' if data else ''}</p>
   </header>
   <main>{body}</main>
@@ -623,15 +623,25 @@ def _daily_autogen_loop():
             print(f"자동 생성 체크 중 오류(다음 주기에 재시도): {e}")
 
 
-def main():
-    """서버를 이 프로세스/스레드에서 블로킹으로 띄운다 (CLI 직접 실행 및 메뉴바 앱에서 공용)."""
+def start_server():
+    """소켓을 바인드하고(포트 충돌이면 여기서 바로 OSError) 백그라운드 준비 작업을 시작한
+    뒤, 아직 serve_forever는 부르지 않은 서버를 반환한다. 바인드와 blocking accept 루프를
+    분리해둬야 호출부(메뉴바 앱 등)가 '포트 이미 사용 중' 같은 실패를 그 자리에서 바로
+    알아채고 사용자에게 보여줄 수 있다 - 안 그러면 백그라운드 스레드 안에서 조용히 죽어서
+    앱은 멀쩡해 보이는데 서버만 안 뜨는 상태가 됨."""
     if not API_KEY:
         print("경고: GOOGLE_API_KEY가 설정되지 않았습니다. .env에 GOOGLE_API_KEY=... 를 넣어주세요.")
+    httpd = ThreadingHTTPServer(("localhost", PORT), Handler)
     print(f"http://localhost:{PORT} 에서 서비스 중 (오늘자 캐시가 없으면 서버 켜지는 즉시 자동 생성 시작, "
           f"날짜 바뀌어도 서버가 떠있으면 알아서 다음날 것도 자동 생성됨)")
     ensure_today_cache_started()  # 접속 안 해도 서버 켜지자마자 바로 생성 시작
     threading.Thread(target=_daily_autogen_loop, daemon=True).start()
-    ThreadingHTTPServer(("localhost", PORT), Handler).serve_forever()
+    return httpd
+
+
+def main():
+    """CLI에서 직접 실행할 때: 바인드하고 이 스레드에서 블로킹으로 서비스."""
+    start_server().serve_forever()
 
 
 if __name__ == "__main__":
