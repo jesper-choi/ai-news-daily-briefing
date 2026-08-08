@@ -395,7 +395,7 @@ def render_html(day_str, available, data, generating=False, regenerating=False):
         <div class="generating">
           <div class="pulse-dots"><span></span><span></span><span></span></div>
           <p>{title}</p>
-          <p class="hint">GeekNews · Hacker News를 훑어서 AI 관련 기사를 고르고 있어요.<br>보통 3~6분 걸려요. 이 페이지는 6초마다 자동으로 새로고침돼요.</p>
+          <p class="hint">GeekNews · Hacker News를 훑어서 AI 관련 기사를 고르고, 20개 각각 상세 요약까지 만들고 있어요.<br>레이트리밋 때문에 10~20분 넘게 걸릴 수 있어요. 이 페이지는 6초마다 자동으로 새로고침돼요.</p>
         </div>"""
         item_count, generated_at = 0, ""
     elif data is None:
