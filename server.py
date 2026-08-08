@@ -450,13 +450,16 @@ def paragraphs_html(text):
 
 
 def date_picker_html(selected, available):
-    # 오늘자가 아직 생성 중이면 available(=캐시 파일이 실제 존재하는 날짜)엔 없음 ->
-    # 그래도 드롭다운에 "선택된 상태"로는 보이게 합성해서 넣어줌. 이전 날짜들은 그대로 선택 가능.
-    dates = available if selected in available else [selected, *available]
+    # available은 '캐시 파일이 실제로 있는 날짜'라서 생성 중인 오늘자는 빠져 있음.
+    # 오늘자는 항상 목록에 넣어야 함 - 예전엔 selected일 때만 합성해서 넣는 바람에,
+    # 생성 중에 과거 날짜를 고르면 오늘자 옵션이 사라져서 돌아올 방법이 없었음.
+    # selected도 같이 넣어줌(캐시 없는 날짜를 URL로 직접 연 경우 선택 상태 유지).
+    today = date.today().isoformat()
+    dates = sorted({today, selected, *available}, reverse=True)
     options = "".join(
         f'<option value="{d}"{" selected" if d == selected else ""}>'
-        f'{d}{" (오늘)" if d == date.today().isoformat() else ""}'
-        f'{" · 생성 중" if d == selected and d not in available else ""}</option>'
+        f'{d}{" (오늘)" if d == today else ""}'
+        f'{("" if d in available else (" · 생성 중" if d == today else " · 없음"))}</option>'
         for d in dates
     )
     return f"""<select class="date-picker" onchange="location.href='/?date='+this.value">{options}</select>"""
