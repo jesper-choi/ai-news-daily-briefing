@@ -321,13 +321,15 @@ _generation_lock = threading.Lock()
 _generating = False
 
 
-def ensure_today_cache_started():
-    """논블로킹(HTTP 핸들러용): 오늘 캐시가 있으면 반환. 없으면 백그라운드 스레드로 생성을
-    시작해두고 None을 반환 -> 호출부는 '생성 중' 페이지를 즉시 보여줄 수 있다."""
+def ensure_today_cache_started(force=False):
+    """논블로킹(HTTP 핸들러용): 오늘 캐시가 있으면 반환. 없으면(또는 force=True로 재생성
+    요청이면) 백그라운드 스레드로 생성을 시작해두고 None을 반환 -> 호출부는 '생성 중'
+    페이지를 즉시 보여줄 수 있다."""
     today = date.today().isoformat()
-    cached = load_cache_for_date(today)
-    if cached is not None:
-        return cached
+    if not force:
+        cached = load_cache_for_date(today)
+        if cached is not None:
+            return cached
 
     global _generating
     with _generation_lock:
@@ -454,6 +456,13 @@ def render_html(day_str, available, data, generating=False):
     border-bottom: 1px solid var(--border);
   }}
   .eyebrow-row {{ display: flex; align-items: center; justify-content: space-between; gap: 1rem; }}
+  .header-controls {{ display: flex; align-items: center; gap: .5rem; }}
+  .btn-regenerate {{
+    font-family: var(--font-sans); font-size: .8rem; color: var(--text); background: var(--card);
+    border: 1px solid var(--border); border-radius: 8px; padding: .4rem .6rem; cursor: pointer;
+    text-decoration: none; white-space: nowrap;
+  }}
+  .btn-regenerate:hover {{ border-color: var(--accent); color: var(--accent); }}
   .eyebrow {{
     display: block; font-size: .75rem; font-weight: 700; letter-spacing: .14em;
     text-transform: uppercase; color: var(--accent); margin-bottom: .9rem;
@@ -540,7 +549,10 @@ def render_html(day_str, available, data, generating=False):
   <header>
     <div class="eyebrow-row">
       <span class="eyebrow">Daily Briefing</span>
-      {date_picker_html(day_str, available)}
+      <div class="header-controls">
+        {date_picker_html(day_str, available)}
+        {f'<a class="btn-regenerate" href="/?date={day_str}&regenerate=1">↻ 다시 생성</a>' if day_str == date.today().isoformat() and not generating else ""}
+      </div>
     </div>
     <h1>AI 데일리 브리핑</h1>
     <p>{day_str}{f' · 총 {item_count}개 · {generated_at} 생성' if data else ''}</p>
@@ -559,10 +571,18 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
 
-        requested = urllib.parse.parse_qs(parsed.query).get("date", [None])[0]
+        query = urllib.parse.parse_qs(parsed.query)
+        requested = query.get("date", [None])[0]
         today_str = date.today().isoformat()
         # validate format so a bad ?date= can't be used for path traversal into cache_path()
         day_str = requested if requested and re.fullmatch(r"\d{4}-\d{2}-\d{2}", requested) else today_str
+
+        if query.get("regenerate", [None])[0] and day_str == today_str:
+            ensure_today_cache_started(force=True)
+            self.send_response(302)
+            self.send_header("Location", f"/?date={today_str}")
+            self.end_headers()
+            return
 
         if day_str == today_str:
             data = ensure_today_cache_started()  # non-blocking: None while still generating
