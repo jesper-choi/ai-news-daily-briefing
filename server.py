@@ -43,7 +43,11 @@ load_dotenv()
 BASE_URL = "https://news.hada.io/"
 HN_URL = "https://news.ycombinator.com/"
 CANDIDATE_N = 20  # 각 소스에서 우선 훑어볼 후보 개수
-PICK_N = 10  # 그중 AI 관련성 순으로 골라낼 개수
+# ponytail: gemini-3.5-flash 무료 티어는 하루 20회 호출 한도(분당 아니라 일일 쿼터).
+# 생성 1회당 선별 2콜 + 요약 PICK_N*2콜을 쓰므로 PICK_N=5면 12콜로 하루 한도 안에 여유
+# 있게 들어옴. PICK_N=10(22콜)은 한 번만 돌려도 그날 한도를 넘겨버려서 5로 낮춤 -> 유료
+# 티어로 옮기거나 여러 기사를 한 콜에 묶어 요약하면 다시 늘릴 수 있음.
+PICK_N = 5  # 그중 AI 관련성 순으로 골라낼 개수
 PORT = 8787
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
 API_KEY = os.environ.get("GOOGLE_API_KEY")
@@ -157,6 +161,11 @@ def _gemini_call(prompt, max_output_tokens=16000):
             )
             return resp.text.strip()
         except APIError as e:
+            # 하루 단위 쿼터 소진(PerDay)은 몇 초 기다린다고 풀리는 게 아니라 자정 리셋까지는
+            # 무조건 다시 실패함 -> 재시도로 시간 날리지 말고 바로 포기 (분당/짧은 백오프성
+            # 429는 기존대로 재시도)
+            if e.code == 429 and "PerDay" in str(e):
+                raise
             if e.code in (429, 503) and attempt < 2:
                 m = re.search(r"retry in ([\d.]+)s", str(e))
                 time.sleep(float(m.group(1)) + 1 if m else 15)
