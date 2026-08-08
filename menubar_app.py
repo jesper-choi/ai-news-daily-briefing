@@ -5,6 +5,7 @@
 사용법:
     .venv/bin/python3 menubar_app.py
 """
+import os
 import threading
 import webbrowser
 
@@ -13,9 +14,14 @@ import rumps
 import server
 
 
+ICON = os.path.join(os.path.dirname(__file__), "menubar_icon.png")
+
+
 class BriefingApp(rumps.App):
     def __init__(self):
-        super().__init__("📰", quit_button="서버 끄고 종료")
+        # template=True: 흑백 실루엣을 macOS가 라이트/다크 메뉴바에 맞춰 자동으로 반전해줌
+        # (이모지 대신 써서 다른 메뉴바 아이콘들과 톤이 맞음, favicon과 같은 모노그램 컨셉)
+        super().__init__("AI 데일리 브리핑", icon=ICON, template=True, quit_button="서버 끄고 종료")
 
     @rumps.clicked("브라우저에서 열기")
     def open_browser(self, _):
