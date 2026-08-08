@@ -1,4 +1,4 @@
-# AI 데일리 브리핑
+# AI Daily Briefing
 
 [GeekNews](https://news.hada.io/)와 [Hacker News](https://news.ycombinator.com/)를 매일 훑어서 AI 관련성 높은 글만 골라, Gemini로 한국어 요약(짧은 요약 + 상세 요약)까지 붙여 `localhost`로 보여주는 개인용 크롤러 겸 서버.
 
