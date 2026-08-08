@@ -120,6 +120,17 @@ def fetch_hn_top(n=CANDIDATE_N):
     return items
 
 
+# 봇 차단/로그인/JS 전용 페이지는 200 OK로 "인증하세요" 같은 안내문만 돌려줌. 그게
+# 본문으로 잡히면 기사 내용인 줄 알고 요약해버려서(openreview가 딱 이 케이스였음)
+# 짧은 추출물에 한해 이런 문구가 보이면 추출 실패로 친다. 긴 본문에서는 검사하지
+# 않으므로 캡차를 '다루는' 진짜 기사는 걸러지지 않음.
+_BOT_WALL_MARKERS = (
+    "verification", "captcha", "are you a robot", "enable javascript",
+    "javascript is required", "javascript to continue", "access denied",
+    "sign in to", "log in to", "subscribe to continue", "cookies to continue",
+)
+
+
 def fetch_article_text(url, max_chars=12000):
     """원문 기사 본문을 최선을 다해 추출. 실패하면 None (호출부에서 excerpt로 대체)."""
     try:
@@ -135,7 +146,11 @@ def fetch_article_text(url, max_chars=12000):
         paragraphs = [p.get_text(" ", strip=True) for p in container.find_all("p")]
         text = " ".join(p for p in paragraphs if len(p) > 30)
         text = re.sub(r"\s+", " ", text).strip()
-        return text[:max_chars] if text else None
+        if not text:
+            return None
+        if len(text) < 600 and any(m in text.lower() for m in _BOT_WALL_MARKERS):
+            return None
+        return text[:max_chars]
     except requests.RequestException:
         return None
 
@@ -264,6 +279,24 @@ def summarize_ko(item, article_text):
         return {"abstract": msg, "detail": msg}
 
     source = article_text or item["excerpt"] or item["title"]
+    # 소스가 얼마나 되는지에 따라 요구 분량을 맞춘다. 예전엔 소스가 몇 줄이든 무조건
+    # "4500~9000자"를 요구해서, 본문을 못 가져온 기사는 모델이 제목만 보고 지어낸 긴
+    # 글이 나왔음(82자 excerpt -> 3000자 요약 같은 식). 소스가 얇으면 짧게 쓰게 하고
+    # 창작을 명시적으로 금지하는 게 맞음.
+    if len(source) >= 1000:
+        detail_spec = (
+            "A4 용지 4~6장 분량(한국어 기준 약 4500~9000자)의 아주 상세한 요약. 배경과 맥락, "
+            "핵심 내용을 항목별로 풍부하게, 구체적인 근거·수치·인용·사례, 관련 배경지식, "
+            "다양한 시각(찬반/한계점 등), 의의와 시사점까지 깊이 있게 다루는 여러 문단의 글. "
+            "짧게 요약하지 말고 충분히 길고 읽을거리가 되도록 풀어써줘. 문단 사이는 빈 줄로 구분해줘."
+        )
+    else:
+        detail_spec = (
+            "위 자료는 기사 본문이 아니라 짧은 소개글이야(본문을 가져오지 못했음). "
+            "그러니 분량을 억지로 늘리지 말고, 위에 실제로 적힌 내용만으로 2~4문단 정도만 써줘. "
+            "위 자료에 없는 사실·수치·인용·사례·배경을 지어내거나 추측해서 채우면 절대 안 돼. "
+            "확실하지 않은 건 쓰지 말고, 아는 만큼만 담백하게 정리해줘. 문단 사이는 빈 줄로 구분해줘."
+        )
     prompt = (
         f"다음은 '{item['title']}' 기사의 원문 발췌(또는 목록 페이지 요약)입니다. "
         "원문이 외국어면 자연스러운 한국어로 풀어써줘.\n\n"
@@ -272,10 +305,7 @@ def summarize_ko(item, article_text):
         "[ABSTRACT]\n"
         "2~3문장으로 핵심만 압축한 요약\n\n"
         "[DETAIL]\n"
-        "A4 용지 4~6장 분량(한국어 기준 약 4500~9000자)의 아주 상세한 요약. 배경과 맥락, "
-        "핵심 내용을 항목별로 풍부하게, 구체적인 근거·수치·인용·사례, 관련 배경지식, "
-        "다양한 시각(찬반/한계점 등), 의의와 시사점까지 깊이 있게 다루는 여러 문단의 글. "
-        "짧게 요약하지 말고 충분히 길고 읽을거리가 되도록 풀어써줘. 문단 사이는 빈 줄로 구분해줘. "
+        f"{detail_spec} "
         "본문만 작성하고, '더 필요하신가요?' 같은 되묻는 말이나 인사말 등 대화체 멘트는 절대 넣지 마."
     )
     try:
@@ -457,6 +487,12 @@ def render_html(day_str, available, data, generating=False, regenerating=False):
                 link = html.escape(it["link"])
                 discuss_url = html.escape(it["discuss_url"])
                 detail_html = paragraphs_html(it["detail"])
+                # 본문을 못 가져와 짧은 소개글만으로 요약한 경우 -> 읽는 사람이 요약의
+                # 근거가 얇다는 걸 알 수 있게 표시 (봇 차단/로그인벽/유튜브 링크 등)
+                thin = it.get("summary_source") == "listing"
+                thin_badge = ('<span class="dot">·</span>'
+                              '<span class="badge-thin" title="원문 본문을 가져오지 못해 '
+                              '목록의 짧은 소개글만으로 요약했어요">소개글 기반</span>') if thin else ""
                 cards.append(f"""
         <article class="entry">
           <p class="index">{it['rank']:02d}</p>
@@ -467,11 +503,13 @@ def render_html(day_str, available, data, generating=False, regenerating=False):
             <span>▲ {it['points']}</span>
             <span class="dot">·</span>
             <a class="meta-link" href="{discuss_url}" target="_blank" rel="noopener">토론 보기</a>
+            {thin_badge}
           </div>
           <p class="abstract">{abstract}</p>
           <details class="detail-toggle">
             <summary>전체 요약 읽기</summary>
             <div class="detail-text">{detail_html}</div>
+            <button type="button" class="detail-close" onclick="var d=this.closest('details');d.open=false;d.scrollIntoView({{block:'nearest'}});">↑ 접기</button>
           </details>
           <div class="actions">
             <a class="btn-primary" href="{link}" target="_blank" rel="noopener">원문 보기</a>
@@ -576,6 +614,11 @@ def render_html(day_str, available, data, generating=False, regenerating=False):
     font-size: .78rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted);
   }}
   .meta .dot {{ opacity: .5; }}
+  .badge-thin {{
+    padding: .1rem .45rem; border-radius: 4px; border: 1px solid var(--border);
+    background: var(--card); color: var(--muted); cursor: help;
+    font-size: .72rem; letter-spacing: .03em; text-transform: none;
+  }}
   .meta-link {{ color: var(--muted); text-decoration: none; border-bottom: 1px solid var(--border); }}
   .meta-link:hover {{ color: var(--accent); border-color: var(--accent); }}
   .abstract {{ margin: 0 0 1.1rem; font-size: 1.05rem; line-height: 1.8; color: var(--text); }}
@@ -594,6 +637,13 @@ def render_html(day_str, available, data, generating=False, regenerating=False):
   }}
   .detail-text p {{ margin: 0 0 1.15rem; }}
   .detail-text p:last-child {{ margin-bottom: 0; }}
+  .detail-close {{
+    margin-top: 1.1rem; padding: .45rem 1rem; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--card); color: var(--muted);
+    font-family: var(--font-sans); font-size: .8rem; font-weight: 700; cursor: pointer;
+    letter-spacing: .03em;
+  }}
+  .detail-close:hover {{ border-color: var(--accent); color: var(--accent); }}
   .actions {{ display: flex; }}
   .btn-primary {{
     display: inline-flex; align-items: center; gap: .4rem; padding: .6rem 1.3rem;
