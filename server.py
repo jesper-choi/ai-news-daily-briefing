@@ -613,7 +613,8 @@ def _daily_autogen_loop():
             print(f"자동 생성 체크 중 오류(다음 주기에 재시도): {e}")
 
 
-if __name__ == "__main__":
+def main():
+    """서버를 이 프로세스/스레드에서 블로킹으로 띄운다 (CLI 직접 실행 및 메뉴바 앱에서 공용)."""
     if not API_KEY:
         print("경고: GOOGLE_API_KEY가 설정되지 않았습니다. .env에 GOOGLE_API_KEY=... 를 넣어주세요.")
     print(f"http://localhost:{PORT} 에서 서비스 중 (오늘자 캐시가 없으면 서버 켜지는 즉시 자동 생성 시작, "
@@ -621,3 +622,7 @@ if __name__ == "__main__":
     ensure_today_cache_started()  # 접속 안 해도 서버 켜지자마자 바로 생성 시작
     threading.Thread(target=_daily_autogen_loop, daemon=True).start()
     ThreadingHTTPServer(("localhost", PORT), Handler).serve_forever()
+
+
+if __name__ == "__main__":
+    main()
