@@ -43,21 +43,21 @@ load_dotenv()
 BASE_URL = "https://news.hada.io/"
 HN_URL = "https://news.ycombinator.com/"
 CANDIDATE_N = 20  # 각 소스에서 우선 훑어볼 후보 개수
-# ponytail: gemini-3.5-flash 무료 티어는 하루 20회 호출 한도(분당 아니라 일일 쿼터).
-# 생성 1회당 선별 2콜 + 요약 PICK_N*2콜을 쓰므로 PICK_N=5면 12콜로 하루 한도 안에 여유
-# 있게 들어옴. PICK_N=10(22콜)은 한 번만 돌려도 그날 한도를 넘겨버려서 5로 낮춤 -> 유료
-# 티어로 옮기거나 여러 기사를 한 콜에 묶어 요약하면 다시 늘릴 수 있음.
-PICK_N = 5  # 그중 AI 관련성 순으로 골라낼 개수
+PICK_N = 10  # 그중 AI 관련성 순으로 골라낼 개수
 PORT = 8787
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
 API_KEY = os.environ.get("GOOGLE_API_KEY")
-MODEL = "gemini-3.5-flash"
+# gemini-3.5-flash 무료 티어는 AI Studio 대시보드 실측 RPD 20/RPM 5라 생성 1회(선별
+# 2콜+요약 PICK_N*2콜=22콜)만으로 하루 한도를 넘김. gemini-3.5-flash-lite는 같은
+# 무료 티어에서 RPD 500/RPM 15로 훨씬 넉넉해서(품질도 확인함 - 선별/상세요약 둘 다
+# 정상) 이쪽으로 바꿈. thinking_config는 이 모델이 지원 안 해서 호출부에서도 뺐음.
+MODEL = "gemini-3.5-flash-lite"
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; news-clrawler/1.0)"}
 gemini = genai.Client(api_key=API_KEY) if API_KEY else None
-# ponytail: free-tier gemini-3.5-flash allows ~5 requests/min, so we pace calls with
-# a global last-call timestamp. Single-process only; a real multi-worker deployment
-# needs a shared rate limiter (e.g. redis) instead.
-_MIN_INTERVAL = 13  # seconds between Gemini calls
+# ponytail: RPM 15 한도라 60/15=4초가 이론적 최소 간격 - 여유 두고 5초로 페이싱.
+# 전역 타임스탬프 하나로 페이싱하는 거라 싱글 프로세스 전용; 진짜 멀티 워커로 돌리려면
+# 공유 레이트리미터(redis 등)가 필요함.
+_MIN_INTERVAL = 5  # seconds between Gemini calls
 _last_call = 0.0
 
 
@@ -149,15 +149,12 @@ def _gemini_call(prompt, max_output_tokens=16000):
             time.sleep(wait)
         _last_call = time.time()
         try:
+            # -lite 모델은 thinking_config 자체를 안 받음(400 INVALID_ARGUMENT) -> 원래
+            # thinking_budget=0으로 끄던 것도 이 모델엔 애초에 해당 없음(reasoning 기능 없음)
             resp = gemini.models.generate_content(
                 model=MODEL,
                 contents=prompt,
-                config=genai.types.GenerateContentConfig(
-                    max_output_tokens=max_output_tokens,
-                    # 요약 작업엔 내부 reasoning이 불필요 + 토큰 예산을 갉아먹어 본문이 잘리는
-                    # 원인이었음 -> 끄고 그만큼을 전부 보이는 텍스트에 씀
-                    thinking_config=genai.types.ThinkingConfig(thinking_budget=0),
-                ),
+                config=genai.types.GenerateContentConfig(max_output_tokens=max_output_tokens),
             )
             return resp.text.strip()
         except APIError as e:
