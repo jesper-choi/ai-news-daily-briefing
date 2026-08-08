@@ -47,18 +47,27 @@ PICK_N = 10  # 그중 AI 관련성 순으로 골라낼 개수
 PORT = 8787
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
 API_KEY = os.environ.get("GOOGLE_API_KEY")
-# gemini-3.5-flash 무료 티어는 AI Studio 대시보드 실측 RPD 20/RPM 5라 생성 1회(선별
-# 2콜+요약 PICK_N*2콜=22콜)만으로 하루 한도를 넘김. gemini-3.5-flash-lite는 같은
-# 무료 티어에서 RPD 500/RPM 15로 훨씬 넉넉해서(품질도 확인함 - 선별/상세요약 둘 다
-# 정상) 이쪽으로 바꿈. thinking_config는 이 모델이 지원 안 해서 호출부에서도 뺐음.
-MODEL = "gemini-3.5-flash-lite"
+# 무료 티어 한도(AI Studio 대시보드 실측)를 한 모델로는 감당 못 함: flash 계열은
+# RPD 20/RPM 5인데 생성 1회가 22콜(선별 2 + 요약 PICK_N*2)이라 한 번에 하루치가 날아감.
+# -> 여러 모델을 함께 쓴다. 품질 좋은 flash를 앞에 두되, 매 호출마다 "지금 가장 빨리
+# 부를 수 있는(=페이싱 대기가 가장 짧은)" 모델을 골라서 자동으로 부하가 갈라지고,
+# 하루 쿼터가 소진된 모델은 그날 건너뛴다. flash 둘(40콜)을 다 써도 lite 둘(1000콜)이
+# 받쳐줘서 요약이 통째로 실패하는 일이 없고, 병행 덕에 페이싱 대기도 절반으로 줄어듦.
+# (초 = 60/RPM에 여유를 둔 값)
+# 위 티어를 다 쓰기 전엔 아래 티어로 내려가지 않는다(품질 우선). 티어 안에서는 먼저
+# 준비되는 모델을 골라 번갈아 쓰므로 대기가 절반으로 줄고 쿼터도 고르게 소모된다.
+MODEL_TIERS = [
+    [("gemini-3.6-flash", 12), ("gemini-3.5-flash", 12)],       # RPD 20씩, RPM 5
+    [("gemini-3.5-flash-lite", 4), ("gemini-3.1-flash-lite", 4)],  # RPD 500씩, RPM 15
+]
+MODELS = [m for tier in MODEL_TIERS for m in tier]
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; news-clrawler/1.0)"}
 gemini = genai.Client(api_key=API_KEY) if API_KEY else None
-# ponytail: RPM 15 한도라 60/15=4초가 이론적 최소 간격 - 여유 두고 5초로 페이싱.
-# 전역 타임스탬프 하나로 페이싱하는 거라 싱글 프로세스 전용; 진짜 멀티 워커로 돌리려면
-# 공유 레이트리미터(redis 등)가 필요함.
-_MIN_INTERVAL = 5  # seconds between Gemini calls
-_last_call = 0.0
+# ponytail: 모델별 마지막 호출 시각/쿼터 소진일을 전역 dict로 들고 페이싱함. 생성은
+# _generating 가드 덕에 한 번에 한 스레드만 도니까 락 없이 충분; 진짜 멀티 워커로
+# 돌리려면 공유 레이트리미터(redis 등)가 필요함.
+_model_last_call = {}  # model -> 마지막 호출 시각(epoch)
+_model_exhausted = {}  # model -> 일일 쿼터가 소진된 날짜(YYYY-MM-DD)
 
 
 def fetch_top20(n=CANDIDATE_N):
@@ -140,41 +149,66 @@ def _split_summary(text):
     return abstract, text
 
 
+def _next_model(today):
+    """쓸 모델을 고른다. 위 티어(품질 우선)에 아직 쿼터가 남아있으면 절대 아래 티어로
+    내려가지 않고, 티어 안에서는 가장 빨리 준비되는 모델을 뽑는다(같으면 앞쪽 우선)."""
+    now = time.time()
+    for tier in MODEL_TIERS:
+        best = (None, 0, float("inf"))
+        for model, interval in tier:
+            if _model_exhausted.get(model) == today:
+                continue
+            # 이미 간격이 지난 모델은 전부 '지금 준비됨'으로 봐야 간격이 짧다는 이유만으로
+            # 특정 모델이 먼저 뽑히지 않고 목록 순서(품질)대로 뽑힘
+            ready_at = max(_model_last_call.get(model, 0.0) + interval, now)
+            if ready_at < best[2]:
+                best = (model, interval, ready_at)
+        if best[0]:
+            return best[0], best[1]
+    return None, 0
+
+
 def _gemini_call(prompt, max_output_tokens=16000):
-    """페이싱 + 429/503 재시도가 포함된 Gemini 호출. 텍스트를 반환하거나 APIError를 던짐."""
-    global _last_call
-    for attempt in range(3):
-        wait = _MIN_INTERVAL - (time.time() - _last_call)
+    """여러 모델을 번갈아 쓰며 호출. 모델별 페이싱/일일 쿼터 소진/일시적 오류를 알아서
+    처리하고 텍스트를 반환. 쓸 수 있는 모델이 다 떨어지면 마지막 예외를 던짐."""
+    today = date.today().isoformat()
+    last_error = None
+
+    for _ in range(len(MODELS) * 2):
+        model, interval = _next_model(today)
+        if model is None:  # 오늘 쓸 수 있는 모델이 하나도 안 남음
+            break
+
+        wait = interval - (time.time() - _model_last_call.get(model, 0.0))
         if wait > 0:
             time.sleep(wait)
-        _last_call = time.time()
+        _model_last_call[model] = time.time()
+
         try:
-            # -lite 모델은 thinking_config 자체를 안 받음(400 INVALID_ARGUMENT) -> 원래
-            # thinking_budget=0으로 끄던 것도 이 모델엔 애초에 해당 없음(reasoning 기능 없음)
+            # thinking_config는 안 넘김: -lite 계열은 파라미터 자체를 거부(400)하고,
+            # thinking을 쓰는 모델은 그냥 쓰게 두되 아래 토큰 예산을 넉넉히 잡아 대응.
             resp = gemini.models.generate_content(
-                model=MODEL,
+                model=model,
                 contents=prompt,
                 config=genai.types.GenerateContentConfig(max_output_tokens=max_output_tokens),
             )
-            return resp.text.strip()
+            text = (resp.text or "").strip()
+            if text:
+                return text
+            # 빈 응답: 내부 reasoning이 토큰 예산을 다 먹은 경우 등 -> 다른 모델로 넘어감
+            last_error = RuntimeError(f"{model}이 빈 응답을 반환함")
         except APIError as e:
-            # 하루 단위 쿼터 소진(PerDay)은 몇 초 기다린다고 풀리는 게 아니라 자정 리셋까지는
-            # 무조건 다시 실패함 -> 재시도로 시간 날리지 말고 바로 포기 (분당/짧은 백오프성
-            # 429는 기존대로 재시도)
-            if e.code == 429 and "PerDay" in str(e):
-                raise
-            if e.code in (429, 503) and attempt < 2:
-                m = re.search(r"retry in ([\d.]+)s", str(e))
-                time.sleep(float(m.group(1)) + 1 if m else 15)
-                continue
-            raise
-        except Exception:
-            # httpx/network-level hiccups (dropped connection, DNS blip, etc.) aren't APIError
-            # but are just as transient -> retry the same way instead of killing the request.
-            if attempt < 2:
-                time.sleep(5)
-                continue
-            raise
+            last_error = e
+            # 일일 쿼터 소진은 자정 전엔 안 풀리고, 4xx는 이 모델에서만 나는 요청 오류라
+            # 재시도해도 같은 결과 -> 오늘은 이 모델을 빼고 다음 모델로.
+            # 503 등 일시적 오류는 모델을 죽이지 않고 다음 후보로만 넘어감.
+            if (e.code == 429 and "PerDay" in str(e)) or (400 <= e.code < 500 and e.code != 429):
+                _model_exhausted[model] = today
+        except Exception as e:
+            # httpx/network-level hiccups (dropped connection, DNS blip, etc.)
+            last_error = e
+
+    raise last_error or RuntimeError("사용 가능한 Gemini 모델이 없습니다")
 
 
 def select_ai_related(items, n=PICK_N):
@@ -195,7 +229,9 @@ def select_ai_related(items, n=PICK_N):
         f"순위를 매겨서 상위 {n}개의 번호만 답해줘. 설명 없이 번호만 쉼표로 구분해서. 예: 3, 1, 7, 12, 5"
     )
     try:
-        text = _gemini_call(prompt, max_output_tokens=200)
+        # 답 자체는 번호 몇 개라 짧지만, thinking을 쓰는 모델은 내부 reasoning에도 이
+        # 예산을 씀 -> 200으로 조이면 생각하다 예산이 끝나 빈 응답이 옴. 넉넉히 잡아둠.
+        text = _gemini_call(prompt, max_output_tokens=4000)
     except Exception:
         return items[:n]
 
@@ -246,7 +282,10 @@ def summarize_ko(item, article_text):
         abstract, detail = _split_summary(_gemini_call(prompt, max_output_tokens=16000))
         return {"abstract": abstract, "detail": detail}
     except Exception as e:
-        msg = f"요약 생성 실패: {e}"
+        # 예외를 그대로 본문에 넣으면 429 JSON 덩어리가 요약인 척 화면에 박힘(실제로
+        # 그랬음) -> 사람이 읽을 짧은 문구만 남기고 원인은 서버 로그로 보냄
+        print(f"요약 실패 ({item['title'][:50]}): {e}")
+        msg = "요약을 생성하지 못했어요. 잠시 후 '다시 생성'을 눌러주세요."
         return {"abstract": msg, "detail": msg}
 
 
@@ -401,7 +440,7 @@ def render_html(day_str, available, data, generating=False, regenerating=False):
         <div class="generating">
           <div class="pulse-dots"><span></span><span></span><span></span></div>
           <p>{title}</p>
-          <p class="hint">GeekNews · Hacker News를 훑어서 AI 관련 기사를 고르고, 20개 각각 상세 요약까지 만들고 있어요.<br>레이트리밋 때문에 10~20분 넘게 걸릴 수 있어요. 이 페이지는 6초마다 자동으로 새로고침돼요.</p>
+          <p class="hint">GeekNews · Hacker News를 훑어서 AI 관련 기사를 고르고, 20개 각각 상세 요약까지 만들고 있어요.<br>보통 5~10분 걸려요. 이 페이지는 6초마다 자동으로 새로고침돼요.</p>
         </div>"""
         item_count, generated_at = 0, ""
     elif data is None:
