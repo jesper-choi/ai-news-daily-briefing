@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GeekNews(news.hada.io) + Hacker News를 매일 각각 20개씩 훑어서 AI 관련성 높은 5개씩만
+"""GeekNews(news.hada.io) + Hacker News를 매일 각각 20개씩 훑어서 AI 관련성 높은 10개씩만
 골라 한국어로 요약해 localhost로 보여주는 서버. (URL 겹치면 GeekNews 우선, HN 쪽에서 제외)
 
 사용법:
@@ -43,7 +43,7 @@ load_dotenv()
 BASE_URL = "https://news.hada.io/"
 HN_URL = "https://news.ycombinator.com/"
 CANDIDATE_N = 20  # 각 소스에서 우선 훑어볼 후보 개수
-PICK_N = 5  # 그중 AI 관련성 순으로 골라낼 개수
+PICK_N = 10  # 그중 AI 관련성 순으로 골라낼 개수
 PORT = 8787
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
 API_KEY = os.environ.get("GOOGLE_API_KEY")
