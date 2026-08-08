@@ -16,7 +16,7 @@ import threading
 import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import requests
@@ -42,6 +42,10 @@ load_dotenv()
 
 BASE_URL = "https://news.hada.io/"
 HN_URL = "https://news.ycombinator.com/"
+# 주 2회꼴로만 올라오는 뉴스레터라 '오늘'로 좁히면 대부분의 날이 비어버림 -> 최근 며칠
+# 창으로 보여준다. 전부 AI 엔지니어링 글이라 AI 관련성 선별 호출은 아예 하지 않음.
+NEWSLETTER_URL = "https://aiengineering.beehiiv.com/"
+NEWSLETTER_DAYS = 7
 CANDIDATE_N = 20  # 각 소스에서 우선 훑어볼 후보 개수
 PICK_N = 10  # 그중 AI 관련성 순으로 골라낼 개수
 PORT = 8787
@@ -116,6 +120,64 @@ def fetch_hn_top(n=CANDIDATE_N):
             "excerpt": "",
             "points": score_el.get_text(strip=True).split()[0] if score_el else "0",
             "discuss_url": f"https://news.ycombinator.com/item?id={item_id}",
+        })
+    return items
+
+
+def _beehiiv_post_meta(url):
+    """포스트 페이지의 JSON-LD에서 (발행일, 제목, 설명)을 뽑는다. 실패하면 None.
+    beehiiv는 RSS를 안 주고 목록 페이지에도 날짜가 없어서 글마다 한 번씩 열어봐야 함."""
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        if resp.status_code != 200:
+            return None
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for script in soup.find_all("script", type="application/ld+json"):
+            data = json.loads(script.get_text())
+            if data.get("@type") == "Article" and data.get("datePublished"):
+                return data["datePublished"][:10], data.get("headline", ""), data.get("description", "")
+    except (requests.RequestException, json.JSONDecodeError, ValueError):
+        return None
+    return None
+
+
+def fetch_newsletter_recent(days=NEWSLETTER_DAYS, scan=8):
+    """AI Engineering 뉴스레터에서 최근 days일 안에 나온 글만 가져온다.
+    주 2회꼴이라 보통 1~3개이고, 그 주에 글이 없으면 빈 리스트(=섹션이 통째로 숨겨짐)."""
+    try:
+        resp = requests.get(NEWSLETTER_URL, headers=HEADERS, timeout=15)
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        print(f"뉴스레터 목록을 가져오지 못함(건너뜀): {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    hrefs = list(dict.fromkeys(
+        a["href"] for a in soup.select("a[href]") if "/p/" in a["href"]
+    ))
+    # 목록이 최신순이라 앞쪽 몇 개만 봐도 충분함 (전부 열면 매번 12번씩 요청하게 됨)
+    urls = [urllib.parse.urljoin(NEWSLETTER_URL, h) for h in hrefs[:scan]]
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        metas = list(pool.map(_beehiiv_post_meta, urls))
+
+    cutoff = (date.today() - timedelta(days=days)).isoformat()
+    items = []
+    for url, meta in zip(urls, metas):
+        if not meta:
+            continue
+        published, headline, description = meta
+        if published < cutoff:
+            continue
+        items.append({
+            "rank": len(items) + 1,
+            "title": headline or url.rsplit("/", 1)[-1].replace("-", " "),
+            "link": url,
+            "domain": "aiengineering.beehiiv.com",
+            "excerpt": description,
+            "points": "",  # 뉴스레터엔 추천수/토론 스레드가 없음 -> 카드에서 발행일로 대체
+            "discuss_url": "",
+            "published": published,
         })
     return items
 
@@ -369,8 +431,12 @@ def _build_today_data():
     for i, it in enumerate(hn, 1):
         it["rank"] = i
 
+    # 뉴스레터는 전부 AI 엔지니어링 글이라 select_ai_related(=Gemini 1콜)를 건너뛴다.
+    newsletter = fetch_newsletter_recent()
+
     build_section(geeknews)
     build_section(hn)
+    build_section(newsletter)
 
     return {
         "date": today,
@@ -378,6 +444,7 @@ def _build_today_data():
         "sections": [
             {"key": "geeknews", "label": "GeekNews", "items": geeknews},
             {"key": "hn", "label": "Hacker News", "items": hn},
+            {"key": "newsletter", "label": f"AI Engineering · 최근 {NEWSLETTER_DAYS}일", "items": newsletter},
         ],
     }
 
@@ -493,21 +560,26 @@ def render_html(day_str, available, data, generating=False, regenerating=False):
                 # 본문을 못 가져와 짧은 소개글만으로 요약한 경우 -> 읽는 사람이 요약의
                 # 근거가 얇다는 걸 알 수 있게 표시 (봇 차단/로그인벽/유튜브 링크 등)
                 thin = it.get("summary_source") == "listing"
-                thin_badge = ('<span class="dot">·</span>'
-                              '<span class="badge-thin" title="원문 본문을 가져오지 못해 '
+                thin_badge = ('<span class="badge-thin" title="원문 본문을 가져오지 못해 '
                               '목록의 짧은 소개글만으로 요약했어요">소개글 기반</span>') if thin else ""
+                # 소스마다 있는 정보가 달라서(뉴스레터엔 추천수/토론 스레드가 없고 대신
+                # 발행일이 있음) 있는 항목만 골라 · 로 이어붙인다
+                meta_bits = [f"<span>{domain}</span>"]
+                if it.get("published"):
+                    meta_bits.append(f"<span>{html.escape(it['published'])}</span>")
+                if it.get("points"):
+                    meta_bits.append(f"<span>▲ {html.escape(str(it['points']))}</span>")
+                if it.get("discuss_url"):
+                    meta_bits.append(f'<a class="meta-link" href="{discuss_url}" '
+                                     f'target="_blank" rel="noopener">토론 보기</a>')
+                if thin_badge:
+                    meta_bits.append(thin_badge)
+                meta_html = '<span class="dot">·</span>'.join(meta_bits)
                 cards.append(f"""
         <article class="entry">
           <p class="index">{it['rank']:02d}</p>
           <h3>{title}</h3>
-          <div class="meta">
-            <span>{domain}</span>
-            <span class="dot">·</span>
-            <span>▲ {it['points']}</span>
-            <span class="dot">·</span>
-            <a class="meta-link" href="{discuss_url}" target="_blank" rel="noopener">토론 보기</a>
-            {thin_badge}
-          </div>
+          <div class="meta">{meta_html}</div>
           <p class="abstract">{abstract}</p>
           <details class="detail-toggle">
             <summary>전체 요약 읽기</summary>
