@@ -441,10 +441,12 @@ def _build_today_data():
     return {
         "date": today,
         "generated_at": datetime.now().isoformat(),
+        # 뉴스레터가 개수가 가장 적으니 맨 위에. 그 주에 글이 없어 섹션이 통째로 빠지면
+        # GeekNews가 첫 섹션이 되고, 첫 섹션 스타일(:first-child)도 자동으로 따라감.
         "sections": [
+            {"key": "newsletter", "label": f"AI Engineering · 최근 {NEWSLETTER_DAYS}일", "items": newsletter},
             {"key": "geeknews", "label": "GeekNews", "items": geeknews},
             {"key": "hn", "label": "Hacker News", "items": hn},
-            {"key": "newsletter", "label": f"AI Engineering · 최근 {NEWSLETTER_DAYS}일", "items": newsletter},
         ],
     }
 
