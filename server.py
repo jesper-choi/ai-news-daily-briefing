@@ -335,6 +335,21 @@ def select_ai_related(items, n=PICK_N):
     return picked or items[:n]
 
 
+# LLM이 만든 mermaid는 라벨 안의 괄호·따옴표·특수문자에서 자주 깨진다 -> 문법을 좁게
+# 제한해서 실패율을 낮춘다. 그래도 깨지면 브라우저 쪽에서 그 다이어그램만 조용히 뺌.
+MERMAID_SPEC = (
+    "구조·흐름·비교처럼 그림으로 보면 확 이해되는 내용이 있으면, 본문 중간에 mermaid "
+    "다이어그램을 1개(많아야 2개) 넣어줘. 글로 충분한 내용이면 억지로 넣지 마.\n"
+    "다이어그램은 아래 규칙을 반드시 지켜:\n"
+    "- ```mermaid 로 시작해서 ``` 로 닫는 코드블록으로 쓸 것\n"
+    "- 종류는 flowchart TD, flowchart LR, sequenceDiagram 중 하나만 쓸 것\n"
+    "- 모든 노드 라벨은 큰따옴표로 감쌀 것. 예: A[\"사용자 요청\"] --> B[\"검색 엔진\"]\n"
+    "- 라벨 안에 괄호 ( ) [ ] { }, 따옴표, 쉼표, 콜론, <br>, 마크다운 기호를 쓰지 말 것\n"
+    "- 라벨은 한국어로 짧게(20자 이내), 노드는 8개 이하로\n"
+    "- 다이어그램은 본문을 보조만 함. 다이어그램 없이 읽어도 이해되게 글을 써줘"
+)
+
+
 def summarize_ko(item, article_text):
     if not gemini:
         msg = "GOOGLE_API_KEY가 설정되지 않아 요약을 생성할 수 없습니다."
@@ -350,7 +365,8 @@ def summarize_ko(item, article_text):
             "A4 용지 4~6장 분량(한국어 기준 약 4500~9000자)의 아주 상세한 요약. 배경과 맥락, "
             "핵심 내용을 항목별로 풍부하게, 구체적인 근거·수치·인용·사례, 관련 배경지식, "
             "다양한 시각(찬반/한계점 등), 의의와 시사점까지 깊이 있게 다루는 여러 문단의 글. "
-            "짧게 요약하지 말고 충분히 길고 읽을거리가 되도록 풀어써줘. 문단 사이는 빈 줄로 구분해줘."
+            "짧게 요약하지 말고 충분히 길고 읽을거리가 되도록 풀어써줘. 문단 사이는 빈 줄로 구분해줘.\n\n"
+            + MERMAID_SPEC
         )
     else:
         detail_spec = (
@@ -363,7 +379,8 @@ def summarize_ko(item, article_text):
         f"다음은 '{item['title']}' 기사의 원문 발췌(또는 목록 페이지 요약)입니다. "
         "원문이 외국어면 자연스러운 한국어로 풀어써줘.\n\n"
         f"---\n{source}\n---\n\n"
-        "아래 형식을 정확히 지켜서 응답해줘. 마크다운 기호나 다른 설명은 넣지 마.\n\n"
+        "아래 형식을 정확히 지켜서 응답해줘. 아래에 허용한 mermaid 블록 말고는 "
+        "마크다운 기호(#, *, - 등)나 다른 설명은 넣지 마.\n\n"
         "[ABSTRACT]\n"
         "2~3문장으로 핵심만 압축한 요약\n\n"
         "[DETAIL]\n"
@@ -512,10 +529,57 @@ def is_generating():
     return _generating
 
 
-def paragraphs_html(text):
-    """빈 줄로 구분된 텍스트를 <p> 태그들로 변환 (내용은 escape)."""
+_MERMAID_BLOCK = re.compile(r"```mermaid[ \t]*\n(.*?)```", re.S)
+
+
+def _text_paragraphs(text):
     parts = [html.escape(p.strip()) for p in re.split(r"\n\s*\n", text) if p.strip()]
-    return "".join(f"<p>{p}</p>" for p in parts) or f"<p>{html.escape(text)}</p>"
+    return "".join(f"<p>{p}</p>" for p in parts)
+
+
+def paragraphs_html(text):
+    """빈 줄로 구분된 텍스트를 <p>로, ```mermaid 블록은 다이어그램으로 변환 (내용은 escape).
+    다이어그램은 여기선 원문 그대로 심어두고 브라우저에서 mermaid가 그린다."""
+    out, pos = [], 0
+    for m in _MERMAID_BLOCK.finditer(text):
+        out.append(_text_paragraphs(text[pos:m.start()]))
+        code = m.group(1).strip()
+        if code:
+            out.append(f'<div class="diagram"><pre class="mermaid">{html.escape(code)}</pre></div>')
+        pos = m.end()
+    out.append(_text_paragraphs(text[pos:]))
+    return "".join(out) or f"<p>{html.escape(text)}</p>"
+
+
+# 별도 상수로 빼둔 이유: 페이지 전체가 f-string이라 여기 중괄호를 전부 이중으로 써야 함.
+# 다이어그램이 있는 페이지에서만 삽입되므로 없는 날은 CDN을 받지도 않는다.
+MERMAID_SCRIPT = """
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  mermaid.initialize({
+    startOnLoad: false, securityLevel: "strict",
+    theme: dark ? "dark" : "neutral",
+    themeVariables: { fontFamily: "-apple-system, BlinkMacSystemFont, sans-serif" },
+  });
+  // LLM이 만든 다이어그램은 문법이 깨질 때가 있음 -> 하나씩 그리고, 실패한 것만 조용히
+  // 접어서 숨긴다(요약 본문은 그대로 읽을 수 있게). 페이지 전체가 죽으면 안 됨.
+  async function draw(root) {
+    for (const node of root.querySelectorAll("pre.mermaid:not([data-done])")) {
+      node.dataset.done = "1";
+      try {
+        const { svg } = await mermaid.render("d" + Math.random().toString(36).slice(2), node.textContent);
+        node.innerHTML = svg;
+      } catch (e) {
+        node.closest(".diagram")?.remove();
+      }
+    }
+  }
+  // <details>가 닫혀 있으면 폭이 0이라 그래프가 찌그러짐 -> 펼칠 때 처음 한 번만 그린다.
+  for (const d of document.querySelectorAll("details.detail-toggle")) {
+    d.addEventListener("toggle", () => { if (d.open) draw(d); });
+  }
+</script>"""
 
 
 def date_picker_html(selected, available):
@@ -714,6 +778,13 @@ def render_html(day_str, available, data, generating=False, regenerating=False):
   }}
   .detail-text p {{ margin: 0 0 1.15rem; }}
   .detail-text p:last-child {{ margin-bottom: 0; }}
+  .diagram {{
+    margin: 1.4rem 0; padding: 1.1rem; border-radius: 10px;
+    background: var(--card); border: 1px solid var(--border);
+    overflow-x: auto;  /* 넓은 다이어그램이 본문을 밀어내지 않게 */
+  }}
+  .diagram pre.mermaid {{ margin: 0; text-align: center; font-family: var(--font-sans); }}
+  .diagram svg {{ max-width: 100%; height: auto; }}
   .detail-close {{
     margin-top: 1.1rem; padding: .45rem 1rem; border-radius: 8px;
     border: 1px solid var(--border); background: var(--card); color: var(--muted);
@@ -748,6 +819,7 @@ def render_html(day_str, available, data, generating=False, regenerating=False):
   </header>
   <main>{body}</main>
   <footer>GeekNews · Hacker News 기반 · Gemini로 생성한 원문 요약</footer>
+  {MERMAID_SCRIPT if 'class="mermaid"' in body else ''}
 </body>
 </html>"""
 
