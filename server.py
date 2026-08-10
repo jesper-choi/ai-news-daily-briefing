@@ -217,6 +217,39 @@ def fetch_article_text(url, max_chars=12000):
         return None
 
 
+def fetch_geeknews_topic(discuss_url, max_chars=12000):
+    """GeekNews 토픽 페이지의 자체 한국어 요약을 가져온다. 원문이 봇 차단/유튜브 등으로
+    막혔을 때의 대체 소스 - 목록 excerpt는 이 요약의 첫 줄만 잘라온 거라 90자뿐이지만,
+    토픽 페이지엔 5천~1만자짜리 정리가 통째로 있다."""
+    try:
+        resp = requests.get(discuss_url, headers=HEADERS, timeout=10)
+        if resp.status_code != 200:
+            return None
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
+            tag.decompose()
+        container = soup.select_one("div.topic_contents")
+        if not container:
+            return None
+        text = re.sub(r"\s+", " ", container.get_text(" ", strip=True)).strip()
+        return text[:max_chars] if text else None
+    except requests.RequestException:
+        return None
+
+
+def fetch_source_text(item):
+    """요약에 쓸 본문을 구한다. 원문 -> (GeekNews면) 토픽 페이지 요약 순으로 시도.
+    (본문, 출처종류)를 반환하고, 둘 다 실패하면 (None, 'listing')."""
+    text = fetch_article_text(item["link"])
+    if text:
+        return text, "article"
+    if "news.hada.io/topic" in item.get("discuss_url", ""):
+        topic = fetch_geeknews_topic(item["discuss_url"])
+        if topic:
+            return topic, "topic"
+    return None, "listing"
+
+
 def _split_summary(text):
     """[ABSTRACT]/[DETAIL] 마커로 응답을 분리. 마커가 없으면 앞부분을 abstract로 대체."""
     m = re.search(r"\[ABSTRACT\]\s*(.*?)\s*\[DETAIL\]\s*(.*)", text, re.S)
@@ -424,14 +457,14 @@ def build_section(items):
         return items
     # Article bodies are plain HTTP fetches (no rate limit) -> safe to parallelize.
     with ThreadPoolExecutor(max_workers=6) as pool:
-        article_texts = list(pool.map(lambda it: fetch_article_text(it["link"]), items))
+        sources = list(pool.map(fetch_source_text, items))
 
     # Gemini free-tier caps requests/min -> summarize sequentially (summarize_ko paces itself).
-    for item, article_text in zip(items, article_texts):
-        result = summarize_ko(item, article_text)
+    for item, (source_text, source_kind) in zip(items, sources):
+        result = summarize_ko(item, source_text)
         item["abstract"] = result["abstract"]
         item["detail"] = result["detail"]
-        item["summary_source"] = "article" if article_text else "listing"
+        item["summary_source"] = source_kind
     return items
 
 
@@ -625,9 +658,15 @@ def render_html(day_str, available, data, generating=False, regenerating=False):
                 detail_html = paragraphs_html(it["detail"])
                 # 본문을 못 가져와 짧은 소개글만으로 요약한 경우 -> 읽는 사람이 요약의
                 # 근거가 얇다는 걸 알 수 있게 표시 (봇 차단/로그인벽/유튜브 링크 등)
-                thin = it.get("summary_source") == "listing"
-                thin_badge = ('<span class="badge-thin" title="원문 본문을 가져오지 못해 '
-                              '목록의 짧은 소개글만으로 요약했어요">소개글 기반</span>') if thin else ""
+                # 요약이 원문 본문 기반인지 아닌지를 밝혀둔다(무엇을 읽고 쓴 요약인지)
+                badges = {
+                    "topic": ("원문을 가져오지 못해 GeekNews 토픽 페이지의 요약을 "
+                              "바탕으로 정리했어요", "긱뉴스 요약 기반"),
+                    "listing": ("원문 본문을 가져오지 못해 목록의 짧은 소개글만으로 "
+                                "요약했어요", "소개글 기반"),
+                }.get(it.get("summary_source"))
+                thin_badge = (f'<span class="badge-thin" title="{badges[0]}">{badges[1]}</span>'
+                              if badges else "")
                 # 소스마다 있는 정보가 달라서(뉴스레터엔 추천수/토론 스레드가 없고 대신
                 # 발행일이 있음) 있는 항목만 골라 · 로 이어붙인다
                 meta_bits = [f"<span>{domain}</span>"]
