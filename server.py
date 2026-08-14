@@ -389,6 +389,12 @@ MERMAID_SPEC = (
     "- 조건 분기는 마름모 노드로: C{\"토큰 남았나\"} -->|\"예\"| D[\"계속 생성\"]\n"
     "- 주체가 여럿이고 순서가 핵심이면 sequenceDiagram + Note over / alt 로\n"
     "- 노드는 6~14개 정도로 충분히 구체적으로. 노드 2~3개짜리 앙상한 그림은 쓰지 마\n"
+    "이런 건 다이어그램으로 그리지 마(그림으로 만들면 오히려 읽기 나빠짐):\n"
+    "- 벤치마크 점수·수치 비교처럼 사실상 표인 내용. 그건 그냥 글로 써\n"
+    "- 관계 없이 항목만 늘어놓은 목록\n"
+    "가로로 너무 넓어지지 않게: 기본은 flowchart TD로 위에서 아래로 흐르게 짜고, "
+    "한 단계에 나란히 놓는 형제 노드는 3개까지만. 단계가 4개 이하로 짧고 일직선일 때만 "
+    "flowchart LR을 써.\n"
     "문법은 아래를 반드시 지켜(어기면 그림이 통째로 안 그려짐):\n"
     "- ```mermaid 로 시작해서 ``` 로 닫는 코드블록으로 쓸 것\n"
     "- 종류는 flowchart TD, flowchart LR, sequenceDiagram 중 하나만 쓸 것\n"
@@ -606,11 +612,32 @@ def paragraphs_html(text):
 MERMAID_SCRIPT = """
 <script type="module">
   import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
-  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  // 색은 페이지 CSS 변수에서 그대로 가져온다 -> 라이트/다크 팔레트를 여기 또 적어둘
+  // 필요가 없고, 본문 색과 항상 같이 움직임.
+  const css = getComputedStyle(document.documentElement);
+  const v = (name) => css.getPropertyValue(name).trim();
   mermaid.initialize({
     startOnLoad: false, securityLevel: "strict",
-    theme: dark ? "dark" : "neutral",
-    themeVariables: { fontFamily: "-apple-system, BlinkMacSystemFont, sans-serif" },
+    theme: "base",
+    // useMaxWidth: false 가 핵심. 기본값(true)이면 mermaid가 svg를 컨테이너 폭에
+    // 맞춰 축소해서, 넓은 다이어그램일수록 글씨가 읽을 수 없게 작아짐. 원래 크기로
+    // 그리게 두고 넘치면 .diagram 쪽에서 가로 스크롤로 처리한다.
+    flowchart: { useMaxWidth: false, curve: "basis", nodeSpacing: 45, rankSpacing: 55, padding: 14 },
+    sequence: { useMaxWidth: false },
+    themeVariables: {
+      fontFamily: "-apple-system, BlinkMacSystemFont, sans-serif",
+      fontSize: "15px",
+      primaryColor: v("--accent-soft"), primaryBorderColor: v("--accent"),
+      primaryTextColor: v("--text"), mainBkg: v("--accent-soft"), nodeBorder: v("--accent"),
+      secondaryColor: v("--card"), tertiaryColor: v("--bg"),
+      lineColor: v("--muted"), textColor: v("--text"),
+      clusterBkg: v("--bg"), clusterBorder: v("--border"),
+      edgeLabelBackground: v("--card"),
+      actorBkg: v("--accent-soft"), actorBorder: v("--accent"), actorTextColor: v("--text"),
+      signalColor: v("--muted"), signalTextColor: v("--text"),
+      noteBkgColor: v("--card"), noteTextColor: v("--text"), noteBorderColor: v("--border"),
+      labelBoxBkgColor: v("--card"), labelTextColor: v("--text"),
+    },
   });
   // LLM이 만든 다이어그램은 문법이 깨질 때가 있음 -> 하나씩 그리고, 실패한 것만 조용히
   // 접어서 숨긴다(요약 본문은 그대로 읽을 수 있게). 페이지 전체가 죽으면 안 됨.
@@ -840,7 +867,9 @@ def render_html(day_str, available, data, generating=False, regenerating=False):
     overflow-x: auto;  /* 넓은 다이어그램이 본문을 밀어내지 않게 */
   }}
   .diagram pre.mermaid {{ margin: 0; text-align: center; font-family: var(--font-sans); }}
-  .diagram svg {{ max-width: 100%; height: auto; }}
+  /* max-width를 풀어야 넓은 다이어그램이 축소되지 않고 원래 크기로 그려진다
+     (넘치는 만큼은 .diagram의 overflow-x로 스크롤). 좁은 건 auto 마진으로 가운데. */
+  .diagram svg {{ max-width: none; height: auto; display: block; margin: 0 auto; }}
   .detail-close {{
     margin-top: 1.1rem; padding: .45rem 1rem; border-radius: 8px;
     border: 1px solid var(--border); background: var(--card); color: var(--muted);
