@@ -60,8 +60,11 @@ API_KEY = os.environ.get("GOOGLE_API_KEY")
 # (초 = 60/RPM에 여유를 둔 값)
 # 위 티어를 다 쓰기 전엔 아래 티어로 내려가지 않는다(품질 우선). 티어 안에서는 먼저
 # 준비되는 모델을 골라 번갈아 쓰므로 대기가 절반으로 줄고 쿼터도 고르게 소모된다.
+# 최신 3.7을 1티어에 단독으로 두어 하루 20콜은 전부 3.7이 맡고, 남는 2콜과 3.7이
+# 과부하(503)일 때만 3.6/3.5로 내려간다.
 MODEL_TIERS = [
-    [("gemini-3.6-flash", 12), ("gemini-3.5-flash", 12)],       # RPD 20씩, RPM 5
+    [("gemini-3.7-flash", 12)],                                    # RPD 20, RPM 5
+    [("gemini-3.6-flash", 12), ("gemini-3.5-flash", 12)],          # RPD 20씩, RPM 5
     [("gemini-3.5-flash-lite", 4), ("gemini-3.1-flash-lite", 4)],  # RPD 500씩, RPM 15
 ]
 MODELS = [m for tier in MODEL_TIERS for m in tier]
@@ -259,14 +262,14 @@ def _split_summary(text):
     return abstract, text
 
 
-def _next_model(today):
+def _next_model(today, skip=()):
     """쓸 모델을 고른다. 위 티어(품질 우선)에 아직 쿼터가 남아있으면 절대 아래 티어로
     내려가지 않고, 티어 안에서는 가장 빨리 준비되는 모델을 뽑는다(같으면 앞쪽 우선)."""
     now = time.time()
     for tier in MODEL_TIERS:
         best = (None, 0, float("inf"))
         for model, interval in tier:
-            if _model_exhausted.get(model) == today:
+            if model in skip or _model_exhausted.get(model) == today:
                 continue
             # 이미 간격이 지난 모델은 전부 '지금 준비됨'으로 봐야 간격이 짧다는 이유만으로
             # 특정 모델이 먼저 뽑히지 않고 목록 순서(품질)대로 뽑힘
@@ -283,9 +286,12 @@ def _gemini_call(prompt, max_output_tokens=16000):
     처리하고 텍스트를 반환. 쓸 수 있는 모델이 다 떨어지면 마지막 예외를 던짐."""
     today = date.today().isoformat()
     last_error = None
+    # 이번 호출에서 실패한 모델은 다시 뽑지 않는다. 티어에 모델이 하나뿐이면(3.7) 이게
+    # 없을 때 그 모델이 503을 뱉는 내내 같은 모델만 계속 뽑혀 아래 티어로 못 내려감.
+    failed = set()
 
-    for _ in range(len(MODELS) * 2):
-        model, interval = _next_model(today)
+    for _ in range(len(MODELS)):
+        model, interval = _next_model(today, failed)
         if model is None:  # 오늘 쓸 수 있는 모델이 하나도 안 남음
             break
 
@@ -307,8 +313,10 @@ def _gemini_call(prompt, max_output_tokens=16000):
                 return text
             # 빈 응답: 내부 reasoning이 토큰 예산을 다 먹은 경우 등 -> 다른 모델로 넘어감
             last_error = RuntimeError(f"{model}이 빈 응답을 반환함")
+            failed.add(model)
         except APIError as e:
             last_error = e
+            failed.add(model)
             # 일일 쿼터 소진은 자정 전엔 안 풀리고, 4xx는 이 모델에서만 나는 요청 오류라
             # 재시도해도 같은 결과 -> 오늘은 이 모델을 빼고 다음 모델로.
             # 503 등 일시적 오류는 모델을 죽이지 않고 다음 후보로만 넘어감.
@@ -317,6 +325,7 @@ def _gemini_call(prompt, max_output_tokens=16000):
         except Exception as e:
             # httpx/network-level hiccups (dropped connection, DNS blip, etc.)
             last_error = e
+            failed.add(model)
 
     raise last_error or RuntimeError("사용 가능한 Gemini 모델이 없습니다")
 
@@ -371,14 +380,22 @@ def select_ai_related(items, n=PICK_N):
 # LLM이 만든 mermaid는 라벨 안의 괄호·따옴표·특수문자에서 자주 깨진다 -> 문법을 좁게
 # 제한해서 실패율을 낮춘다. 그래도 깨지면 브라우저 쪽에서 그 다이어그램만 조용히 뺌.
 MERMAID_SPEC = (
-    "구조·흐름·비교처럼 그림으로 보면 확 이해되는 내용이 있으면, 본문 중간에 mermaid "
-    "다이어그램을 1개(많아야 2개) 넣어줘. 글로 충분한 내용이면 억지로 넣지 마.\n"
-    "다이어그램은 아래 규칙을 반드시 지켜:\n"
+    "구조·흐름·비교처럼 그림으로 보면 확 이해되는 내용이 있으면, 관련 문단 바로 뒤에 "
+    "mermaid 다이어그램을 넣어줘. 자료가 충분히 길면 2~3개까지 좋고, 글로 충분한 "
+    "내용이면 억지로 넣지 마.\n"
+    "다이어그램은 '그냥 나열'이 아니라 정보를 담아야 해. 아래를 적극적으로 활용해:\n"
+    "- 화살표에 라벨을 붙여 관계를 설명: A -->|\"캐시 미스\"| B\n"
+    "- 단계를 subgraph로 묶어 계층을 보여주기: subgraph S1[\"학습 단계\"] ... end\n"
+    "- 조건 분기는 마름모 노드로: C{\"토큰 남았나\"} -->|\"예\"| D[\"계속 생성\"]\n"
+    "- 주체가 여럿이고 순서가 핵심이면 sequenceDiagram + Note over / alt 로\n"
+    "- 노드는 6~14개 정도로 충분히 구체적으로. 노드 2~3개짜리 앙상한 그림은 쓰지 마\n"
+    "문법은 아래를 반드시 지켜(어기면 그림이 통째로 안 그려짐):\n"
     "- ```mermaid 로 시작해서 ``` 로 닫는 코드블록으로 쓸 것\n"
     "- 종류는 flowchart TD, flowchart LR, sequenceDiagram 중 하나만 쓸 것\n"
-    "- 모든 노드 라벨은 큰따옴표로 감쌀 것. 예: A[\"사용자 요청\"] --> B[\"검색 엔진\"]\n"
-    "- 라벨 안에 괄호 ( ) [ ] { }, 따옴표, 쉼표, 콜론, <br>, 마크다운 기호를 쓰지 말 것\n"
-    "- 라벨은 한국어로 짧게(20자 이내), 노드는 8개 이하로\n"
+    "- 노드 라벨, subgraph 제목, 화살표 라벨은 전부 큰따옴표로 감쌀 것\n"
+    "- 따옴표 안에 괄호 ( ) [ ] { }, 따옴표, 쉼표, 콜론, <br>, 마크다운 기호를 쓰지 말 것\n"
+    "- style, classDef, click, linkStyle 같은 꾸미기 문법은 쓰지 말 것\n"
+    "- 라벨은 한국어로 짧게(20자 이내)\n"
     "- 다이어그램은 본문을 보조만 함. 다이어그램 없이 읽어도 이해되게 글을 써줘"
 )
 
