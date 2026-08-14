@@ -761,6 +761,8 @@ def render_html(day_str, available, data, generating=False, regenerating=False):
   :root {{
     --bg: #f7f4ed; --card: #fffdf8; --text: #2b2820; --muted: #837a68;
     --border: #e6e0d2; --accent: #2f5d8a; --accent-soft: #dde7f0;
+    /* 본문 폭. 다이어그램이 들어가면서 700px로는 너무 좁아 축소/스크롤이 잦았음 */
+    --page: 1180px; --page-pad: 1.25rem;
     --font-serif: Georgia, "Iowan Old Style", "Palatino Linotype", "Noto Serif KR", serif;
     --font-sans: -apple-system, BlinkMacSystemFont, "Pretendard", "Apple SD Gothic Neo", "Segoe UI", sans-serif;
   }}
@@ -776,7 +778,7 @@ def render_html(day_str, available, data, generating=False, regenerating=False):
     font-family: var(--font-sans); line-height: 1.7; -webkit-font-smoothing: antialiased;
   }}
   header {{
-    max-width: 700px; margin: 0 auto; padding: 4.5rem 1.5rem 2.5rem;
+    max-width: var(--page); margin: 0 auto; padding: 3.5rem var(--page-pad) 2.5rem;
     border-bottom: 1px solid var(--border);
   }}
   .eyebrow-row {{ display: flex; align-items: center; justify-content: space-between; gap: 1rem; }}
@@ -800,7 +802,7 @@ def render_html(day_str, available, data, generating=False, regenerating=False):
     font-size: clamp(2rem, 5vw, 2.75rem); margin: 0 0 .8rem; letter-spacing: -.01em; color: var(--text);
   }}
   header p {{ margin: 0; color: var(--muted); font-size: .92rem; }}
-  main {{ max-width: 700px; margin: 0 auto; padding: .5rem 1.5rem 6rem; }}
+  main {{ max-width: var(--page); margin: 0 auto; padding: .5rem var(--page-pad) 6rem; }}
   .empty {{ padding: 4rem 0; text-align: center; color: var(--muted); font-size: 1rem; }}
   .generating {{ padding: 5rem 0; text-align: center; }}
   .pulse-dots {{ display: flex; justify-content: center; gap: .5rem; margin-bottom: 1.6rem; }}
@@ -885,7 +887,7 @@ def render_html(day_str, available, data, generating=False, regenerating=False):
   }}
   .btn-primary:hover {{ opacity: .85; }}
   footer {{
-    max-width: 700px; margin: 0 auto; padding: 0 1.5rem 4rem; text-align: center;
+    max-width: var(--page); margin: 0 auto; padding: 0 var(--page-pad) 4rem; text-align: center;
     color: var(--muted); font-size: .8rem;
   }}
 </style>
