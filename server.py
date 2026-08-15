@@ -69,7 +69,15 @@ MODEL_TIERS = [
 ]
 MODELS = [m for tier in MODEL_TIERS for m in tier]
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; news-clrawler/1.0)"}
-gemini = genai.Client(api_key=API_KEY) if API_KEY else None
+# 타임아웃이 없으면 응답이 안 오는 소켓에서 read()로 영영 블록된다. 실제로 그 상태로
+# 17시간을 매달려 있었고, _generating이 True로 잡힌 채라 "생성 중" 화면에서 못 빠져나오고
+# 자동 재시도(_daily_autogen_loop)도 계속 no-op이 됐음. 끊기면 _gemini_call이 다음
+# 모델로 넘어가니 넉넉하게만 잡아주면 됨. (단위: ms)
+GEMINI_TIMEOUT_MS = 240_000
+gemini = (
+    genai.Client(api_key=API_KEY, http_options=genai.types.HttpOptions(timeout=GEMINI_TIMEOUT_MS))
+    if API_KEY else None
+)
 # ponytail: 모델별 마지막 호출 시각/쿼터 소진일을 전역 dict로 들고 페이싱함. 생성은
 # _generating 가드 덕에 한 번에 한 스레드만 도니까 락 없이 충분; 진짜 멀티 워커로
 # 돌리려면 공유 레이트리미터(redis 등)가 필요함.
