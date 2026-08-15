@@ -38,6 +38,20 @@ def test_skip_moves_to_next_tier():
     assert server._next_model(TODAY, {"gemini-3.7-flash"})[0] == "gemini-3.6-flash"
 
 
+def test_call_tally_per_day_and_model():
+    """로그의 '오늘 성공 N 실패 M'이 모델별·날짜별로 따로 세어져야 함."""
+    server._model_calls.clear()
+    for _ in range(3):
+        server._log_call(TODAY, "gemini-3.7-flash", 0.0, "ok", "")
+    server._log_call(TODAY, "gemini-3.7-flash", 0.0, "fail", "")
+    server._log_call(TODAY, "gemini-3.6-flash", 0.0, "ok", "")
+    server._log_call("2026-01-02", "gemini-3.7-flash", 0.0, "ok", "")
+    assert server._model_calls[(TODAY, "gemini-3.7-flash")] == [3, 1]
+    assert server._model_calls[(TODAY, "gemini-3.6-flash")] == [1, 0]
+    assert server._model_calls[("2026-01-02", "gemini-3.7-flash")] == [1, 0]
+    server._model_calls.clear()
+
+
 def test_no_model_left():
     reset()
     for model, _ in server.MODELS:
