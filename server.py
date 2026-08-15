@@ -289,6 +289,25 @@ def _next_model(today, skip=()):
     return None, 0
 
 
+# 모델별로 오늘 몇 번 성공/실패했는지. 무료 티어 RPD(3.7/3.6/3.5는 각 20)를 실제로
+# 얼마나 썼는지 로그만 보고 알 수 있어야 해서 누적 횟수를 같이 찍는다. 날짜를 키에
+# 넣어두면 자정을 넘겨도 어제 값과 안 섞이고, 프로세스가 며칠씩 떠 있어도 그대로 맞음.
+_model_calls = {}  # (날짜, 모델) -> [성공, 실패]
+
+
+def _log_call(today, model, started, status, note):
+    """LLM 호출 한 건을 한 줄로 남긴다. 프롬프트/응답 본문은 안 남기고 걸린 시간과
+    성공 여부만. menubar.log에서 `grep '\\[gemini\\]'`로 하루치를 훑어볼 수 있음."""
+    tally = _model_calls.setdefault((today, model), [0, 0])
+    tally[0 if status == "ok" else 1] += 1
+    ok, fail = tally
+    print(
+        f"[gemini] {time.strftime('%H:%M:%S')} {model} {time.time() - started:5.1f}s "
+        f"{status:4} (오늘 성공 {ok} 실패 {fail}) {note}",
+        flush=True,  # launchd가 파일로 받으면 tty가 아니라 버퍼링됨 -> 바로 안 보임
+    )
+
+
 def _gemini_call(prompt, max_output_tokens=16000):
     """여러 모델을 번갈아 쓰며 호출. 모델별 페이싱/일일 쿼터 소진/일시적 오류를 알아서
     처리하고 텍스트를 반환. 쓸 수 있는 모델이 다 떨어지면 마지막 예외를 던짐."""
@@ -307,6 +326,7 @@ def _gemini_call(prompt, max_output_tokens=16000):
         if wait > 0:
             time.sleep(wait)
         _model_last_call[model] = time.time()
+        started = time.time()
 
         try:
             # thinking_config는 안 넘김: -lite 계열은 파라미터 자체를 거부(400)하고,
@@ -318,11 +338,14 @@ def _gemini_call(prompt, max_output_tokens=16000):
             )
             text = (resp.text or "").strip()
             if text:
+                _log_call(today, model, started, "ok", f"{len(text)}자")
                 return text
             # 빈 응답: 내부 reasoning이 토큰 예산을 다 먹은 경우 등 -> 다른 모델로 넘어감
+            _log_call(today, model, started, "fail", "빈 응답")
             last_error = RuntimeError(f"{model}이 빈 응답을 반환함")
             failed.add(model)
         except APIError as e:
+            _log_call(today, model, started, "fail", f"{e.code} {str(e)[:80]}")
             last_error = e
             failed.add(model)
             # 일일 쿼터 소진은 자정 전엔 안 풀리고, 4xx는 이 모델에서만 나는 요청 오류라
@@ -332,6 +355,7 @@ def _gemini_call(prompt, max_output_tokens=16000):
                 _model_exhausted[model] = today
         except Exception as e:
             # httpx/network-level hiccups (dropped connection, DNS blip, etc.)
+            _log_call(today, model, started, "fail", f"{type(e).__name__}: {str(e)[:80]}")
             last_error = e
             failed.add(model)
 
