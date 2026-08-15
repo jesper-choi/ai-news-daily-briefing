@@ -295,6 +295,15 @@ def _next_model(today, skip=()):
 _model_calls = {}  # (날짜, 모델) -> [성공, 실패]
 
 
+def _err_note(e):
+    """429를 로그에서 구분할 수 있게 quotaId를 뽑는다. 그냥 앞 80자를 자르면 JSON
+    껍데기만 찍히고 정작 중요한 'PerDay(하루치 소진, 자정까지 못 씀)'냐
+    'PerMinute(잠깐 몰린 것, 곧 풀림)'냐가 잘려나감."""
+    msg = str(e)
+    found = re.search(r'"quotaId":\s*"([^"]+)"', msg)
+    return found.group(1) if found else msg[:80]
+
+
 def _log_call(today, model, started, status, note):
     """LLM 호출 한 건을 한 줄로 남긴다. 프롬프트/응답 본문은 안 남기고 걸린 시간과
     성공 여부만. menubar.log에서 `grep '\\[gemini\\]'`로 하루치를 훑어볼 수 있음."""
@@ -345,7 +354,7 @@ def _gemini_call(prompt, max_output_tokens=16000):
             last_error = RuntimeError(f"{model}이 빈 응답을 반환함")
             failed.add(model)
         except APIError as e:
-            _log_call(today, model, started, "fail", f"{e.code} {str(e)[:80]}")
+            _log_call(today, model, started, "fail", f"{e.code} {_err_note(e)}")
             last_error = e
             failed.add(model)
             # 일일 쿼터 소진은 자정 전엔 안 풀리고, 4xx는 이 모델에서만 나는 요청 오류라

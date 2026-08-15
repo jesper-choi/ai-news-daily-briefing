@@ -52,6 +52,15 @@ def test_call_tally_per_day_and_model():
     server._model_calls.clear()
 
 
+def test_err_note_extracts_quota_id():
+    """로그에서 하루치 소진(PerDay)과 잠깐 몰린 것(PerMinute)을 구분할 수 있어야 함."""
+    per_day = ('429 RESOURCE_EXHAUSTED. {"error": {"code": 429, "message": "You exceeded your '
+               'current quota", "details": [{"violations": [{"quotaMetric": "generate_requests", '
+               '"quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier"}]}]}}')
+    assert server._err_note(per_day) == "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+    assert server._err_note("503 UNAVAILABLE. high demand") == "503 UNAVAILABLE. high demand"
+
+
 def test_no_model_left():
     reset()
     for model, _ in server.MODELS:
