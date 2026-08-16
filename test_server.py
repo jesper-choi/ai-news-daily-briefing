@@ -125,6 +125,23 @@ def test_d2_found_without_homebrew_on_path():
         os.environ["PATH"] = original
 
 
+def test_d2_edge_cases():
+    """모델이 규칙을 살짝 어겨도 코드가 화면에 노출되면 안 된다."""
+    if not diagrams.d2_bin():
+        print("    (d2 미설치 - 건너뜀)")
+        return
+    fence = "```"
+    # 대문자 태그
+    up = diagrams.bake_diagrams(f"글.\n\n{fence}D2\na -> b\n{fence}")
+    assert f"{fence}d2svg" in up and "D2\na -> b" not in up, up[:120]
+    # 토큰 한도로 닫는 펜스 없이 잘린 경우
+    cut = diagrams.bake_diagrams(f"앞 문단.\n\n{fence}d2\na -> b\nc ->")
+    assert fence not in cut and "앞 문단." in cut, cut[:120]
+    # abstract 자리에 그림이 오면 컴파일하지 않고 제거
+    ab = diagrams.strip_diagrams(f"핵심 요약 두 문장.\n\n{fence}d2\na -> b\n{fence}")
+    assert ab == "핵심 요약 두 문장." and "svg" not in ab, repr(ab)
+
+
 def test_no_model_left():
     reset()
     for model, _ in llm.MODELS:
