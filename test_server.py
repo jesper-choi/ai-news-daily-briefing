@@ -3,6 +3,7 @@
 
     .venv/bin/python3 test_server.py
 """
+import os
 import re
 import shutil
 import time
@@ -92,7 +93,7 @@ def test_result_line_counts_failed_summaries():
 def test_d2_bakes_valid_and_drops_broken():
     """문법이 맞는 그림은 SVG로 굽고, 깨진 건 코드째 지운다(코드가 화면에 노출되면 안 됨).
     d2가 안 깔려 있으면 이 검사는 건너뜀."""
-    if not shutil.which("d2"):
+    if not diagrams.d2_bin():
         print("    (d2 미설치 - 건너뜀)")
         return
     fence = "```"
@@ -107,6 +108,21 @@ def test_d2_bakes_valid_and_drops_broken():
     assert re.search(r'<svg[^>]*width="[\d.]+"[^>]*height="[\d.]+"', svg), svg[:200]
     assert not svg.lstrip().startswith("<?xml")             # 인라인용이라 선언 제거
     assert "prefers-color-scheme" in svg                    # 다크모드 한 장으로 대응
+
+
+def test_d2_found_without_homebrew_on_path():
+    """launchd로 뜬 프로세스의 PATH엔 /opt/homebrew/bin이 없다. which만 믿으면 로그인
+    자동 실행 때만 다이어그램이 통째로 빠지고, 터미널에서 돌리면 멀쩡해서 못 알아챈다."""
+    if not shutil.which("d2"):
+        print("    (d2 미설치 - 건너뜀)")
+        return
+    original = os.environ["PATH"]
+    try:
+        os.environ["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"  # launchd가 주는 그대로
+        assert shutil.which("d2") is None, "이 테스트의 전제가 깨짐(d2가 PATH에 있음)"
+        assert diagrams.d2_bin() is not None, "PATH가 좁아도 d2를 찾아야 함"
+    finally:
+        os.environ["PATH"] = original
 
 
 def test_no_model_left():

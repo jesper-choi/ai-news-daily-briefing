@@ -6,11 +6,17 @@
 - 페이지가 CDN에서 라이브러리를 받아오지 않아도 되고, <details>를 펼칠 때
   그리느라 폭이 0이라 찌그러지던 문제도 사라진다.
 """
+import os
 import re
 import shutil
 import subprocess
 
 from .config import log
+
+# launchd로 뜬 프로세스의 PATH는 /usr/bin:/bin:/usr/sbin:/sbin뿐이라 homebrew가 안 보인다.
+# which만 믿으면 로그인 후 자동 실행될 때만 다이어그램이 전부 조용히 빠지고, 터미널에서
+# 직접 돌리면 멀쩡해서 알아채기 어렵다 -> 흔한 설치 위치를 직접 확인한다.
+D2_FALLBACK_PATHS = ("/opt/homebrew/bin/d2", "/usr/local/bin/d2")
 
 D2_BLOCK = re.compile(r"```d2[ \t]*\n(.*?)```", re.S)
 # 렌더가 끝난 블록. 안에는 d2 소스가 아니라 완성된 <svg>가 들어있다.
@@ -43,14 +49,21 @@ def _inline_ready(svg):
     return svg
 
 
+def d2_bin():
+    """d2 실행 파일 경로. PATH에 없으면 흔한 설치 위치까지 본다. 없으면 None."""
+    return (shutil.which("d2")
+            or next((p for p in D2_FALLBACK_PATHS if os.access(p, os.X_OK)), None))
+
+
 def render_d2(code):
     """d2 소스를 SVG 문자열로. 컴파일 실패/타임아웃/d2 미설치면 None."""
-    if not shutil.which("d2"):
-        log("그림", "d2가 설치되어 있지 않아 다이어그램을 건너뜁니다 (brew install d2)")
+    binary = d2_bin()
+    if not binary:
+        log("그림", "d2를 찾지 못해 다이어그램을 건너뜁니다 (brew install d2)")
         return None
     try:
         done = subprocess.run(
-            ["d2", *D2_ARGS, "-", "-"],
+            [binary, *D2_ARGS, "-", "-"],
             input=D2_PREAMBLE + code, capture_output=True, text=True, timeout=D2_TIMEOUT,
         )
     except subprocess.SubprocessError as e:
