@@ -12,8 +12,12 @@
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
+brew install d2        # 요약 속 다이어그램 렌더링용
 cp .env.example .env   # GOOGLE_API_KEY=... 채워넣기
 ```
+
+`d2`는 요약에 들어가는 다이어그램을 생성 시점에 SVG로 굽는 데 쓴다. 없어도 서버는
+정상 동작하고 다이어그램만 빠진다.
 
 `GOOGLE_API_KEY`는 [Google AI Studio](https://aistudio.google.com/apikey)에서 발급받은 Gemini API 키. 키가 없으면 서버는 뜨지만 요약 없이 크롤링 결과만 보여준다.
 
@@ -85,6 +89,7 @@ cp .env.example .env   # GOOGLE_API_KEY=... 채워넣기
 | `briefing/repository.py` | 저장소 — 날짜별 캐시 파일 |
 | `briefing/sources.py` | 어댑터 — 크롤링 (GeekNews / HN / 뉴스레터 / 기사 본문) |
 | `briefing/llm.py` | 어댑터 — Gemini 호출, 모델 티어 로테이션, 쿼터 처리 |
+| `briefing/diagrams.py` | 어댑터 — d2 코드를 SVG로 컴파일 |
 | `briefing/config.py` | 공유 — 설정과 로그 |
 
 사이트가 개편되거나 모델이 바뀌면 어댑터만, 화면이 바뀌면 `web.py`만 고치면 된다.
@@ -100,6 +105,7 @@ grep '\[gemini\]' menubar.log          # LLM 호출: 모델 / 소요시간 / 성
 grep '\[생성\]'   menubar.log          # 생성 시작·완료 (소요시간, 항목 수, 요약 실패 수)
 grep '\[출처\]'   menubar.log          # 크롤링 결과와 실패
 grep '\[요약\]'   menubar.log          # 개별 요약 실패
+grep '\[그림\]'   menubar.log          # d2 컴파일 실패
 
 # 오늘 모델별로 몇 번 성공했나 (RPD 소진 확인)
 grep '\[gemini\]' menubar.log | grep ' ok ' | awk '{print $4}' | sort | uniq -c

@@ -3,9 +3,11 @@
 
     .venv/bin/python3 test_server.py
 """
+import re
+import shutil
 import time
 
-from briefing import llm, service, summarize
+from briefing import diagrams, llm, service, summarize
 
 TODAY = "2026-01-01"
 
@@ -85,6 +87,26 @@ def test_result_line_counts_failed_summaries():
     line = service._result_line(data, time.time())
     assert "geeknews=3 hn=1" in line, line
     assert "항목 4 요약실패 2" in line, line
+
+
+def test_d2_bakes_valid_and_drops_broken():
+    """문법이 맞는 그림은 SVG로 굽고, 깨진 건 코드째 지운다(코드가 화면에 노출되면 안 됨).
+    d2가 안 깔려 있으면 이 검사는 건너뜀."""
+    if not shutil.which("d2"):
+        print("    (d2 미설치 - 건너뜀)")
+        return
+    fence = "```"
+    text = (f"앞 문단.\n\n{fence}d2\n사용자 -> 서버: 요청\n서버 -> 모델\n{fence}\n\n"
+            f"뒤 문단.\n\n{fence}d2\n-> -> ->\n{fence}\n\n끝 문단.")
+    out = diagrams.bake_diagrams(text)
+    assert out.count(f"{fence}d2svg") == 1, out[:200]      # 정상 1개만 남고
+    assert f"{fence}d2\n" not in out                        # 깨진 건 흔적도 없어야
+    assert "앞 문단." in out and "뒤 문단." in out and "끝 문단." in out
+    svg = re.search(rf"{fence}d2svg\n(.*?)\n{fence}", out, re.S).group(1)
+    # 폭/높이가 박혀 있어야 브라우저가 컨테이너에 맞춰 줄이지 않는다(mermaid 때의 그 문제)
+    assert re.search(r'<svg[^>]*width="[\d.]+"[^>]*height="[\d.]+"', svg), svg[:200]
+    assert not svg.lstrip().startswith("<?xml")             # 인라인용이라 선언 제거
+    assert "prefers-color-scheme" in svg                    # 다크모드 한 장으로 대응
 
 
 def test_no_model_left():
