@@ -30,7 +30,8 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8787/
 | `briefing/repository.py` | 저장소 — 날짜별 캐시 파일 |
 | `briefing/sources.py` | 어댑터 — 크롤링 (여기서만 `requests`/`bs4`) |
 | `briefing/llm.py` | 어댑터 — Gemini (여기서만 `google.genai`) |
-| `briefing/diagrams.py` | 어댑터 — d2 → SVG |
+| `briefing/diagrams.py` | 어댑터 — d2 → SVG (라이트/다크 두 장) |
+| `briefing/d2_preamble.py` | 다이어그램 디자인 시스템 |
 | `briefing/config.py` | 공유 — 설정과 `log()` |
 
 **규칙**: 아래 계층에서 위 계층을 import 하지 말 것. 바깥 세계(HTTP·SDK·프로세스)는
@@ -49,6 +50,9 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8787/
   `llm.MODEL_TIERS`가 품질 순으로 내려가며 쓰고, 하루 소진된 모델은 그날 건너뛴다.
 - **부분 실패는 조용히 지나가면 안 된다.** 소스 하나가 죽어도 나머지는 만들되
   (`service._fetch_source`), 무슨 일이 있었는지는 반드시 로그에 남길 것.
+- **다이어그램 색은 프리앰블에서만.** 프롬프트가 모델에 색을 맡기면 알록달록해진다.
+  모델은 `class:` 이름만 고르고 팔레트는 `d2_preamble.py`가 준다. hex를 명시하면
+  d2의 `--dark-theme`이 안 먹어서 라이트/다크를 각각 굽고 CSS로 고른다.
 - **LLM 출력은 형식을 어긴다.** d2 펜스가 대문자거나 안 닫히는 경우까지 방어되어 있음
   (`diagrams.D2_BLOCK`, `D2_DANGLING`). 새 형식을 프롬프트에 넣으면 어기는 경우도 같이 처리.
 

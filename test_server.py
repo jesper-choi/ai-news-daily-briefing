@@ -103,11 +103,17 @@ def test_d2_bakes_valid_and_drops_broken():
     assert out.count(f"{fence}d2svg") == 1, out[:200]      # 정상 1개만 남고
     assert f"{fence}d2\n" not in out                        # 깨진 건 흔적도 없어야
     assert "앞 문단." in out and "뒤 문단." in out and "끝 문단." in out
-    svg = re.search(rf"{fence}d2svg\n(.*?)\n{fence}", out, re.S).group(1)
-    # 폭/높이가 박혀 있어야 브라우저가 컨테이너에 맞춰 줄이지 않는다(mermaid 때의 그 문제)
-    assert re.search(r'<svg[^>]*width="[\d.]+"[^>]*height="[\d.]+"', svg), svg[:200]
-    assert not svg.lstrip().startswith("<?xml")             # 인라인용이라 선언 제거
-    assert "prefers-color-scheme" in svg                    # 다크모드 한 장으로 대응
+    block = re.search(rf"{fence}d2svg\n(.*?)\n{fence}", out, re.S).group(1)
+    # 라이트/다크 한 쌍이 들어있고 페이지 CSS가 하나만 보여준다. 색을 hex로 명시하는
+    # 디자인 시스템이라 d2의 --dark-theme으로는 안 되고 두 번 구워야 함.
+    assert block.count('class="d2-light"') == 1 and block.count('class="d2-dark"') == 1
+    svgs = re.findall(r"<svg[^>]*>", block)
+    assert len(svgs) >= 2, svgs
+    for tag in svgs[:1] + svgs[len(svgs) // 2:len(svgs) // 2 + 1]:
+        # 폭/높이가 박혀 있어야 브라우저가 컨테이너에 맞춰 줄이지 않는다(mermaid 때의 그 문제)
+        assert re.search(r'width="[\d.]+"[^>]*height="[\d.]+"', tag), tag[:200]
+    assert "<?xml" not in block                             # 인라인용이라 선언 제거
+    assert "class: card" not in block                       # d2 소스가 아니라 SVG여야
 
 
 def test_d2_found_without_homebrew_on_path():
@@ -123,6 +129,19 @@ def test_d2_found_without_homebrew_on_path():
         assert diagrams.d2_bin() is not None, "PATH가 좁아도 d2를 찾아야 함"
     finally:
         os.environ["PATH"] = original
+
+
+def test_d2_light_and_dark_differ():
+    """두 번 굽는 게 의미가 있으려면 결과가 실제로 달라야 한다(프리앰블이 안 먹으면 같아짐)."""
+    if not diagrams.d2_bin():
+        print("    (d2 미설치 - 건너뜀)")
+        return
+    pair = diagrams.render_d2("a: 노드 { class: card }\nb: 다른 노드 { class: tinted }\na -> b")
+    assert pair, "컴파일 실패"
+    light, dark = pair
+    assert light != dark
+    assert "#F2F2F7" in light, "라이트 캔버스색이 없음"
+    assert "#241f18" in dark, "다크 캔버스색이 없음"
 
 
 def test_d2_edge_cases():
