@@ -3,6 +3,8 @@
 
     .venv/bin/python3 test_server.py
 """
+import time
+
 import server
 
 TODAY = "2026-01-01"
@@ -63,6 +65,26 @@ def test_err_note_extracts_quota_id():
     per_minute = "429 RESOURCE_EXHAUSTED. {'quotaId': 'GenerateRequestsPerMinutePerProjectPerModel'}"
     assert server._err_note(per_minute) == "GenerateRequestsPerMinutePerProjectPerModel"
     assert server._err_note("503 UNAVAILABLE. high demand") == "503 UNAVAILABLE. high demand"
+
+
+def test_fetch_source_survives_a_dead_source():
+    """소스 하나가 죽어도 예외가 올라가면 안 됨 - 예전엔 GeekNews 502 하나에 그날
+    브리핑이 통째로 안 만들어졌음."""
+    def boom():
+        raise RuntimeError("502 Bad Gateway")
+    assert server._fetch_source("GeekNews", boom) == []
+    assert server._fetch_source("GeekNews", lambda: [{"x": 1}]) == [{"x": 1}]
+
+
+def test_result_line_counts_failed_summaries():
+    ok, bad = {"detail": "정상 요약"}, {"detail": server.SUMMARY_FAILED_MSG}
+    data = {"date": "2026-01-01", "sections": [
+        {"key": "geeknews", "items": [ok, bad, ok]},
+        {"key": "hn", "items": [bad]},
+    ]}
+    line = server._result_line(data, time.time())
+    assert "geeknews=3 hn=1" in line, line
+    assert "항목 4 요약실패 2" in line, line
 
 
 def test_no_model_left():
