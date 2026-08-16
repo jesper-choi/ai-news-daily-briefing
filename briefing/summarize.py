@@ -3,7 +3,7 @@
 import re
 
 from .config import PICK_N, log
-from .diagrams import bake_diagrams
+from .diagrams import bake_diagrams, strip_diagrams
 from .llm import _gemini_call, gemini
 
 
@@ -143,7 +143,9 @@ def summarize_ko(item, article_text):
         abstract, detail = _split_summary(_gemini_call(prompt, max_output_tokens=16000))
         # d2 코드를 여기서 바로 SVG로 구워 캐시에 넣는다. 페이지를 열 때마다 컴파일하면
         # 다이어그램 45개짜리 하루치가 매 요청마다 몇 초씩 걸림.
-        return {"abstract": abstract, "detail": bake_diagrams(detail)}
+        # abstract는 카드에 한 줄로 들어가는 자리라 그림이 오면 안 된다. 모델이 거기까지
+        # 다이어그램을 넣는 일은 드물지만, 들어오면 코드가 그대로 노출되므로 잘라낸다.
+        return {"abstract": strip_diagrams(abstract), "detail": bake_diagrams(detail)}
     except Exception as e:
         # 예외를 그대로 본문에 넣으면 429 JSON 덩어리가 요약인 척 화면에 박힘(실제로
         # 그랬음) -> 사람이 읽을 짧은 문구만 남기고 원인은 서버 로그로 보냄
