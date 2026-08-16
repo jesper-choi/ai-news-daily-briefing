@@ -52,6 +52,16 @@ CANDIDATE_N = 20  # 각 소스에서 우선 훑어볼 후보 개수
 PICK_N = 10  # 그중 AI 관련성 순으로 골라낼 개수
 PORT = 8787
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
+
+
+def log(tag, msg):
+    """운영 로그 한 줄. launchd가 stdout을 파일로 받으면 tty가 아니라 블록 버퍼링이
+    걸려서, flush 없이 print만 하면 실패 메시지가 몇 시간씩 파일에 안 나타난다(실제로
+    호출 로그[gemini]만 보이고 나머지는 안 보였음). 태그를 붙여둬서 grep으로 종류별로
+    뽑을 수 있음: [gemini] 호출, [생성] 생성 전체, [출처] 크롤링, [요약] 요약."""
+    print(f"[{tag}] {time.strftime('%m-%d %H:%M:%S')} {msg}", flush=True)
+
+
 API_KEY = os.environ.get("GOOGLE_API_KEY")
 # 무료 티어 한도(AI Studio 대시보드 실측)를 한 모델로는 감당 못 함: flash 계열은
 # RPD 20/RPM 5인데 생성 1회가 22콜(선별 2 + 요약 PICK_N*2)이라 한 번에 하루치가 날아감.
@@ -149,7 +159,7 @@ def _beehiiv_post_meta(url):
             data = json.loads(script.get_text())
             if data.get("@type") == "Article" and data.get("datePublished"):
                 return data["datePublished"][:10], data.get("headline", ""), data.get("description", "")
-    except (requests.RequestException, json.JSONDecodeError, ValueError):
+    except Exception:  # 글 하나 못 읽었다고 뉴스레터 섹션 전체를 날리지 않는다
         return None
     return None
 
@@ -161,7 +171,7 @@ def fetch_newsletter_recent(days=NEWSLETTER_DAYS, scan=8):
         resp = requests.get(NEWSLETTER_URL, headers=HEADERS, timeout=15)
         resp.raise_for_status()
     except requests.RequestException as e:
-        print(f"뉴스레터 목록을 가져오지 못함(건너뜀): {e}")
+        log("출처", f"뉴스레터 목록을 가져오지 못함(이 섹션은 건너뜀): {type(e).__name__}: {e}")
         return []
 
     soup = BeautifulSoup(resp.text, "html.parser")
@@ -226,7 +236,11 @@ def fetch_article_text(url, max_chars=12000):
         if len(text) < 600 and any(m in text.lower() for m in _BOT_WALL_MARKERS):
             return None
         return text[:max_chars]
-    except requests.RequestException:
+    except Exception as e:
+        # RequestException만 잡으면 부족하다. 파싱/디코딩에서 나는 다른 예외는 그대로
+        # 올라가 pool.map -> build_section -> 생성 전체를 죽인다. 기사 하나가 이상하다고
+        # 그날 브리핑을 통째로 날릴 이유는 없음 -> 그 기사만 본문 없이 간다.
+        log("출처", f"본문 추출 실패({url[:60]}): {type(e).__name__}: {str(e)[:60]}")
         return None
 
 
@@ -246,7 +260,8 @@ def fetch_geeknews_topic(discuss_url, max_chars=12000):
             return None
         text = re.sub(r"\s+", " ", container.get_text(" ", strip=True)).strip()
         return text[:max_chars] if text else None
-    except requests.RequestException:
+    except Exception as e:  # 위 fetch_article_text와 같은 이유로 넓게 잡는다
+        log("출처", f"토픽 페이지 실패({discuss_url[:60]}): {type(e).__name__}: {str(e)[:60]}")
         return None
 
 
@@ -314,11 +329,7 @@ def _log_call(today, model, started, status, note):
     tally = _model_calls.setdefault((today, model), [0, 0])
     tally[0 if status == "ok" else 1] += 1
     ok, fail = tally
-    print(
-        f"[gemini] {time.strftime('%H:%M:%S')} {model} {time.time() - started:5.1f}s "
-        f"{status:4} (오늘 성공 {ok} 실패 {fail}) {note}",
-        flush=True,  # launchd가 파일로 받으면 tty가 아니라 버퍼링됨 -> 바로 안 보임
-    )
+    log("gemini", f"{model} {time.time() - started:5.1f}s {status:4} (오늘 성공 {ok} 실패 {fail}) {note}")
 
 
 def _gemini_call(prompt, max_output_tokens=16000):
@@ -372,6 +383,9 @@ def _gemini_call(prompt, max_output_tokens=16000):
             last_error = e
             failed.add(model)
 
+    # 여기까지 왔다는 건 모든 모델이 실패했다는 뜻. 호출부가 문구로 갈음해버리면 로그에
+    # 흔적이 안 남으므로 포기 사실 자체를 남긴다.
+    log("gemini", f"모든 모델 실패 -> 포기 (마지막 오류: {type(last_error).__name__}: {str(last_error)[:80]})")
     raise last_error or RuntimeError("사용 가능한 Gemini 모델이 없습니다")
 
 
@@ -396,7 +410,10 @@ def select_ai_related(items, n=PICK_N):
         # 답 자체는 번호 몇 개라 짧지만, thinking을 쓰는 모델은 내부 reasoning에도 이
         # 예산을 씀 -> 200으로 조이면 생각하다 예산이 끝나 빈 응답이 옴. 넉넉히 잡아둠.
         text = _gemini_call(prompt, max_output_tokens=4000)
-    except Exception:
+    except Exception as e:
+        # 선별에 실패하면 AI 관련성과 무관하게 목록 앞에서 n개를 자른다. 조용히 넘어가면
+        # 그날 섹션이 왜 엉뚱한 글로 찼는지 나중에 알 방법이 없어서 남긴다.
+        log("생성", f"AI 관련성 선별 실패 -> 목록 상위 {n}개로 대체: {type(e).__name__}")
         return items[:n]
 
     picked, seen = [], set()
@@ -494,9 +511,8 @@ def summarize_ko(item, article_text):
     except Exception as e:
         # 예외를 그대로 본문에 넣으면 429 JSON 덩어리가 요약인 척 화면에 박힘(실제로
         # 그랬음) -> 사람이 읽을 짧은 문구만 남기고 원인은 서버 로그로 보냄
-        print(f"요약 실패 ({item['title'][:50]}): {e}")
-        msg = "요약을 생성하지 못했어요. 잠시 후 '다시 생성'을 눌러주세요."
-        return {"abstract": msg, "detail": msg}
+        log("요약", f"실패 ({item['title'][:50]}): {type(e).__name__}: {str(e)[:80]}")
+        return {"abstract": SUMMARY_FAILED_MSG, "detail": SUMMARY_FAILED_MSG}
 
 
 def cache_path(day_str):
@@ -536,13 +552,27 @@ def build_section(items):
     return items
 
 
+def _fetch_source(label, fetch):
+    """소스 하나를 가져온다. 그 소스가 죽어 있으면 빈 리스트로 계속 진행한다 - 예전엔
+    GeekNews가 502만 나도 예외가 그대로 올라가 그날 브리핑이 통째로 안 만들어졌음.
+    한 소스가 죽어도 나머지 섹션은 정상으로 보여주는 게 맞다."""
+    try:
+        items = fetch()
+        log("출처", f"{label} {len(items)}건 수집")
+        return items
+    except Exception as e:
+        log("출처", f"{label} 수집 실패 -> 이 섹션은 비우고 진행: {type(e).__name__}: {str(e)[:80]}")
+        return []
+
+
 def _build_today_data():
     """오늘자 데이터를 실제로 크롤링+요약해서 만든다 (몇 분 걸림). 디스크에 쓰지 않고 반환만."""
     today = date.today().isoformat()
-    geeknews = select_ai_related(fetch_top20())
+    geeknews = select_ai_related(_fetch_source("GeekNews", fetch_top20))
     seen_links = {it["link"] for it in geeknews}
     # GeekNews often re-curates the same story from HN -> drop exact URL dupes, HN loses the tie
-    hn_candidates = [it for it in fetch_hn_top() if it["link"] not in seen_links]
+    hn_candidates = [it for it in _fetch_source("Hacker News", fetch_hn_top)
+                     if it["link"] not in seen_links]
     hn = select_ai_related(hn_candidates)
     for i, it in enumerate(geeknews, 1):
         it["rank"] = i
@@ -550,7 +580,7 @@ def _build_today_data():
         it["rank"] = i
 
     # 뉴스레터는 전부 AI 엔지니어링 글이라 select_ai_related(=Gemini 1콜)를 건너뛴다.
-    newsletter = fetch_newsletter_recent()
+    newsletter = _fetch_source("AI Engineering", fetch_newsletter_recent)
 
     build_section(geeknews)
     build_section(hn)
@@ -595,6 +625,19 @@ _generation_lock = threading.Lock()
 _generating = False
 
 
+SUMMARY_FAILED_MSG = "요약을 생성하지 못했어요. 잠시 후 '다시 생성'을 눌러주세요."
+
+
+def _result_line(data, started):
+    """생성 한 번의 결과를 한 줄로. '오늘치가 제대로 나왔나'를 이 줄 하나로 판단할 수
+    있어야 함 - 요약이 몇 개 비었는지가 핵심이고, 그게 0이 아니면 다시 생성할 신호."""
+    items = [it for s in data["sections"] for it in s["items"]]
+    failed = sum(1 for it in items if it["detail"] == SUMMARY_FAILED_MSG)
+    sections = " ".join(f"{s['key']}={len(s['items'])}" for s in data["sections"])
+    return (f"{data['date']} 완료 {(time.time() - started) / 60:.1f}분 | {sections} | "
+            f"항목 {len(items)} 요약실패 {failed}")
+
+
 @contextmanager
 def _keep_awake():
     """생성이 도는 동안 맥이 유휴 절전에 들어가지 않게 잡아둔다.
@@ -611,7 +654,7 @@ def _keep_awake():
     try:
         proc = subprocess.Popen(["caffeinate", "-i", "-w", str(os.getpid())])
     except OSError as e:  # 맥이 아니거나 caffeinate가 없으면 그냥 진행
-        print(f"절전 방지를 걸지 못했어요(생성은 계속): {e}", flush=True)
+        log("생성", f"절전 방지를 걸지 못했어요(생성은 계속): {e}")
         proc = None
     try:
         yield
@@ -639,11 +682,15 @@ def ensure_today_cache_started(force=False):
         def _run():
             global _generating
             try:
+                started = time.time()
+                log("생성", f"{date.today().isoformat()} 시작" + (" (다시 생성)" if force else ""))
                 with _keep_awake():
-                    _save_cache(_build_today_data())
+                    data = _build_today_data()
+                    _save_cache(data)
+                log("생성", _result_line(data, started))
             except Exception as e:
                 # 실패해도 서버는 안 죽음 - _generating만 풀어주면 다음 새로고침 때 재시도됨
-                print(f"오늘자 캐시 생성 실패, 다음 요청에서 재시도: {e}")
+                log("생성", f"실패, 다음 요청에서 재시도: {type(e).__name__}: {e}")
             finally:
                 with _generation_lock:
                     _generating = False
@@ -1034,7 +1081,7 @@ def _daily_autogen_loop():
         try:
             ensure_today_cache_started()
         except Exception as e:
-            print(f"자동 생성 체크 중 오류(다음 주기에 재시도): {e}")
+            log("생성", f"자동 생성 체크 중 오류(다음 주기에 재시도): {e}")
 
 
 def start_server():
