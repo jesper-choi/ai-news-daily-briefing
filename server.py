@@ -302,7 +302,9 @@ def _err_note(e):
     껍데기만 찍히고 정작 중요한 'PerDay(하루치 소진, 자정까지 못 씀)'냐
     'PerMinute(잠깐 몰린 것, 곧 풀림)'냐가 잘려나감."""
     msg = str(e)
-    found = re.search(r'"quotaId":\s*"([^"]+)"', msg)
+    # APIError의 str()은 JSON이 아니라 파이썬 dict의 repr이라 따옴표가 작은따옴표다.
+    # 큰따옴표만 찾다가 매번 못 잡고 앞 80자로 흘렀음 -> 둘 다 받는다.
+    found = re.search(r"""['"]quotaId['"]:\s*['"]([^'"]+)['"]""", msg)
     return found.group(1) if found else msg[:80]
 
 
