@@ -1,57 +1,57 @@
 #!/usr/bin/env python3
-"""모델 선택 로직 자체 점검. 네트워크/API 키 없이 도는 것만 담음.
+"""계층별 자체 점검. 네트워크/API 키 없이 도는 것만 담음.
 
     .venv/bin/python3 test_server.py
 """
 import time
 
-import server
+from briefing import llm, service, summarize
 
 TODAY = "2026-01-01"
 
 
 def reset():
-    server._model_last_call.clear()
-    server._model_exhausted.clear()
+    llm._model_last_call.clear()
+    llm._model_exhausted.clear()
 
 
 def test_top_tier_first():
     """1티어에 쿼터가 남아 있으면 절대 아래 티어로 안 내려감."""
     reset()
     for _ in range(5):
-        model, _ = server._next_model(TODAY)
+        model, _ = llm._next_model(TODAY)
         assert model == "gemini-3.7-flash", model
-        server._model_last_call[model] = 0.0  # 페이싱은 지났다고 가정
+        llm._model_last_call[model] = 0.0  # 페이싱은 지났다고 가정
 
 
 def test_falls_through_exhausted_tiers():
     reset()
-    server._model_exhausted["gemini-3.7-flash"] = TODAY
-    assert server._next_model(TODAY)[0] == "gemini-3.6-flash"
-    server._model_exhausted["gemini-3.6-flash"] = TODAY
-    server._model_exhausted["gemini-3.5-flash"] = TODAY
-    assert server._next_model(TODAY)[0].endswith("-lite")
+    llm._model_exhausted["gemini-3.7-flash"] = TODAY
+    assert llm._next_model(TODAY)[0] == "gemini-3.6-flash"
+    llm._model_exhausted["gemini-3.6-flash"] = TODAY
+    llm._model_exhausted["gemini-3.5-flash"] = TODAY
+    assert llm._next_model(TODAY)[0].endswith("-lite")
 
 
 def test_skip_moves_to_next_tier():
     """503처럼 일시적 실패로 skip된 모델이 1티어에 하나뿐일 때 아래 티어로 내려가야 함
     (안 그러면 그 모델만 계속 다시 뽑혀서 무한 재시도)."""
     reset()
-    assert server._next_model(TODAY, {"gemini-3.7-flash"})[0] == "gemini-3.6-flash"
+    assert llm._next_model(TODAY, {"gemini-3.7-flash"})[0] == "gemini-3.6-flash"
 
 
 def test_call_tally_per_day_and_model():
     """로그의 '오늘 성공 N 실패 M'이 모델별·날짜별로 따로 세어져야 함."""
-    server._model_calls.clear()
+    llm._model_calls.clear()
     for _ in range(3):
-        server._log_call(TODAY, "gemini-3.7-flash", 0.0, "ok", "")
-    server._log_call(TODAY, "gemini-3.7-flash", 0.0, "fail", "")
-    server._log_call(TODAY, "gemini-3.6-flash", 0.0, "ok", "")
-    server._log_call("2026-01-02", "gemini-3.7-flash", 0.0, "ok", "")
-    assert server._model_calls[(TODAY, "gemini-3.7-flash")] == [3, 1]
-    assert server._model_calls[(TODAY, "gemini-3.6-flash")] == [1, 0]
-    assert server._model_calls[("2026-01-02", "gemini-3.7-flash")] == [1, 0]
-    server._model_calls.clear()
+        llm._log_call(TODAY, "gemini-3.7-flash", 0.0, "ok", "")
+    llm._log_call(TODAY, "gemini-3.7-flash", 0.0, "fail", "")
+    llm._log_call(TODAY, "gemini-3.6-flash", 0.0, "ok", "")
+    llm._log_call("2026-01-02", "gemini-3.7-flash", 0.0, "ok", "")
+    assert llm._model_calls[(TODAY, "gemini-3.7-flash")] == [3, 1]
+    assert llm._model_calls[(TODAY, "gemini-3.6-flash")] == [1, 0]
+    assert llm._model_calls[("2026-01-02", "gemini-3.7-flash")] == [1, 0]
+    llm._model_calls.clear()
 
 
 def test_err_note_extracts_quota_id():
@@ -61,10 +61,10 @@ def test_err_note_extracts_quota_id():
     per_day = ("429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your "
                "current quota', 'details': [{'violations': [{'quotaMetric': 'generate_requests', "
                "'quotaId': 'GenerateRequestsPerDayPerProjectPerModel-FreeTier'}]}]}}")
-    assert server._err_note(per_day) == "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+    assert llm._err_note(per_day) == "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
     per_minute = "429 RESOURCE_EXHAUSTED. {'quotaId': 'GenerateRequestsPerMinutePerProjectPerModel'}"
-    assert server._err_note(per_minute) == "GenerateRequestsPerMinutePerProjectPerModel"
-    assert server._err_note("503 UNAVAILABLE. high demand") == "503 UNAVAILABLE. high demand"
+    assert llm._err_note(per_minute) == "GenerateRequestsPerMinutePerProjectPerModel"
+    assert llm._err_note("503 UNAVAILABLE. high demand") == "503 UNAVAILABLE. high demand"
 
 
 def test_fetch_source_survives_a_dead_source():
@@ -72,26 +72,26 @@ def test_fetch_source_survives_a_dead_source():
     브리핑이 통째로 안 만들어졌음."""
     def boom():
         raise RuntimeError("502 Bad Gateway")
-    assert server._fetch_source("GeekNews", boom) == []
-    assert server._fetch_source("GeekNews", lambda: [{"x": 1}]) == [{"x": 1}]
+    assert service._fetch_source("GeekNews", boom) == []
+    assert service._fetch_source("GeekNews", lambda: [{"x": 1}]) == [{"x": 1}]
 
 
 def test_result_line_counts_failed_summaries():
-    ok, bad = {"detail": "정상 요약"}, {"detail": server.SUMMARY_FAILED_MSG}
+    ok, bad = {"detail": "정상 요약"}, {"detail": summarize.SUMMARY_FAILED_MSG}
     data = {"date": "2026-01-01", "sections": [
         {"key": "geeknews", "items": [ok, bad, ok]},
         {"key": "hn", "items": [bad]},
     ]}
-    line = server._result_line(data, time.time())
+    line = service._result_line(data, time.time())
     assert "geeknews=3 hn=1" in line, line
     assert "항목 4 요약실패 2" in line, line
 
 
 def test_no_model_left():
     reset()
-    for model, _ in server.MODELS:
-        server._model_exhausted[model] = TODAY
-    assert server._next_model(TODAY) == (None, 0)
+    for model, _ in llm.MODELS:
+        llm._model_exhausted[model] = TODAY
+    assert llm._next_model(TODAY) == (None, 0)
 
 
 if __name__ == "__main__":
