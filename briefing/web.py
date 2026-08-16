@@ -287,15 +287,25 @@ def render_html(day_str, available, data, generating=False, regenerating=False):
   }}
   .detail-text p {{ margin: 0 0 1.15rem; }}
   .detail-text p:last-child {{ margin-bottom: 0; }}
+  /* d2 그림은 자기 캔버스(회색/검정 판)를 갖고 나온다 -> 여기서 배경·테두리를 또
+     주면 판이 이중으로 겹친다. 모서리만 둥글게 깎고 나머지는 SVG에 맡긴다. */
   .diagram {{
-    margin: 1.4rem 0; padding: 1.1rem; border-radius: 10px;
-    background: var(--card); border: 1px solid var(--border);
+    margin: 1.4rem 0; border-radius: 14px; overflow: hidden;
     overflow-x: auto;  /* 넓은 다이어그램이 본문을 밀어내지 않게 */
   }}
+  /* 옛 mermaid 캐시는 캔버스가 없으니 예전처럼 카드 배경을 준다 */
+  .diagram:has(pre.mermaid) {{ padding: 1.1rem; background: var(--card); border: 1px solid var(--border); }}
   .diagram pre.mermaid {{ margin: 0; text-align: center; font-family: var(--font-sans); }}
   /* max-width를 풀어야 넓은 다이어그램이 축소되지 않고 원래 크기로 그려진다
      (넘치는 만큼은 .diagram의 overflow-x로 스크롤). 좁은 건 auto 마진으로 가운데. */
   .diagram svg {{ max-width: none; height: auto; display: block; margin: 0 auto; }}
+  /* 라이트/다크용 SVG가 한 쌍으로 들어있고 여기서 하나만 보여준다 */
+  .d2-dark {{ display: none; }}
+  .d2-light {{ display: block; }}
+  @media (prefers-color-scheme: dark) {{
+    .d2-light {{ display: none; }}
+    .d2-dark {{ display: block; }}
+  }}
   .detail-close {{
     margin-top: 1.1rem; padding: .45rem 1rem; border-radius: 8px;
     border: 1px solid var(--border); background: var(--card); color: var(--muted);

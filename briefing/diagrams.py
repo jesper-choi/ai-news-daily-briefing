@@ -12,6 +12,7 @@ import shutil
 import subprocess
 
 from .config import log
+from .d2_preamble import DARK, LIGHT
 
 # launchd로 뜬 프로세스의 PATH는 /usr/bin:/bin:/usr/sbin:/sbin뿐이라 homebrew가 안 보인다.
 # which만 믿으면 로그인 후 자동 실행될 때만 다이어그램이 전부 조용히 빠지고, 터미널에서
@@ -23,14 +24,9 @@ D2_BLOCK = re.compile(r"```d2[ \t]*\n(.*?)```", re.S | re.I)
 # 토큰 한도에 걸려 응답이 잘리면 닫는 ```가 없어서 위 정규식이 못 잡는다. 남은 펜스는
 # 통째로 지운다 - 어차피 잘린 다이어그램이라 살릴 수도 없고, 노출되면 흉함.
 D2_DANGLING = re.compile(r"```d2[ \t]*\n.*\Z", re.S | re.I)
-# 라이트/다크 테마를 둘 다 넣으면 d2가 prefers-color-scheme 미디어쿼리를 SVG 안에
-# 같이 넣어줘서, 한 장으로 두 모드를 다 커버한다.
-D2_ARGS = ["--theme=0", "--dark-theme=200", "--pad=8"]
+# elk는 프리앰블(d2_preamble)이 지정하지만, 명령줄로도 못박아 둔다.
+D2_ARGS = ["--layout=elk", "--omit-version"]
 D2_TIMEOUT = 20
-# d2는 기본적으로 자기 테마 배경색으로 사각형을 깔아서, 우리 카드 위에 얹으면 색이 다른
-# 판때기가 하나 떠 있는 꼴이 된다. 배경만 투명으로 돌려 페이지 배경이 그대로 비치게 함.
-# (LLM한테 시키지 않고 여기서 붙인다 - 프롬프트에선 꾸미기 문법을 아예 금지해둠)
-D2_PREAMBLE = "style.fill: transparent\n"
 
 
 def _inline_ready(svg):
@@ -57,30 +53,44 @@ def d2_bin():
             or next((p for p in D2_FALLBACK_PATHS if os.access(p, os.X_OK)), None))
 
 
-def render_d2(code):
-    """d2 소스를 SVG 문자열로. 컴파일 실패/타임아웃/d2 미설치면 None."""
-    binary = d2_bin()
-    if not binary:
-        log("그림", "d2를 찾지 못해 다이어그램을 건너뜁니다 (brew install d2)")
-        return None
+def _compile(binary, code, preamble):
+    """프리앰블 + 코드를 d2에 넣어 SVG 하나를 얻는다. 실패하면 (None, 사유)."""
     try:
         done = subprocess.run(
             [binary, *D2_ARGS, "-", "-"],
-            input=D2_PREAMBLE + code, capture_output=True, text=True, timeout=D2_TIMEOUT,
+            input=preamble + "\n" + code, capture_output=True, text=True, timeout=D2_TIMEOUT,
         )
     except subprocess.SubprocessError as e:
-        log("그림", f"d2 실행 실패: {type(e).__name__}")
-        return None
+        return None, f"d2 실행 실패: {type(e).__name__}"
     if done.returncode != 0 or "<svg" not in done.stdout:
-        log("그림", f"d2 컴파일 실패(이 그림은 뺌): {done.stderr.strip()[:120]}")
-        return None
+        return None, done.stderr.strip()[:120]
     svg = _inline_ready(done.stdout)
     if "<script" in svg.lower():
         # d2가 스크립트를 내보낼 일은 없지만, LLM이 쓴 라벨이 그대로 흘러들어오는
         # 경로라 페이지에 raw로 심기 전에 한 번 막아둔다.
-        log("그림", "d2 출력에 script가 있어 뺍니다")
+        return None, "출력에 script가 있음"
+    return svg, ""
+
+
+def render_d2(code):
+    """d2 소스를 (라이트 SVG, 다크 SVG)로. 하나라도 실패하면 None.
+
+    두 번 굽는 이유: 디자인 시스템이 색을 hex로 명시하는데, 그러면 d2의 --dark-theme이
+    안 먹는다(테마가 명시 스타일을 못 이김). 페이지 쪽 CSS가 둘 중 하나만 보여준다.
+    """
+    binary = d2_bin()
+    if not binary:
+        log("그림", "d2를 찾지 못해 다이어그램을 건너뜁니다 (brew install d2)")
         return None
-    return svg
+    light, why = _compile(binary, code, LIGHT)
+    if not light:
+        log("그림", f"d2 컴파일 실패(이 그림은 뺌): {why}")
+        return None
+    dark, why = _compile(binary, code, DARK)
+    if not dark:
+        log("그림", f"다크 렌더 실패(이 그림은 뺌): {why}")
+        return None
+    return light, dark
 
 
 # ponytail: SVG마다 서브셋 폰트가 따로 들어가서 그림 하나에 20~30KB. 하루치 40여 개면
@@ -93,8 +103,13 @@ def bake_diagrams(text):
         code = m.group(1).strip()
         if not code:
             return ""
-        svg = render_d2(code)
-        return f"```d2svg\n{svg}\n```" if svg else ""
+        pair = render_d2(code)
+        if not pair:
+            return ""
+        light, dark = pair
+        # 한 블록 안에 두 장을 넣고 CSS(prefers-color-scheme)가 하나만 보여준다
+        return (f'```d2svg\n<span class="d2-light">{light}</span>'
+                f'<span class="d2-dark">{dark}</span>\n```')
 
     return D2_DANGLING.sub("", D2_BLOCK.sub(replace, text)).rstrip()
 
