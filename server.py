@@ -12,10 +12,12 @@ import html
 import json
 import os
 import re
+import subprocess
 import threading
 import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -591,6 +593,31 @@ _generation_lock = threading.Lock()
 _generating = False
 
 
+@contextmanager
+def _keep_awake():
+    """생성이 도는 동안 맥이 유휴 절전에 들어가지 않게 잡아둔다.
+
+    자정 직후 자동 생성이 도는데 그때 맥은 대개 자고 있다. 자면 프로세스가 통째로
+    얼어붙고 진행 중이던 HTTPS 연결이 끊겨서, 깨어난 뒤 ReadTimeout이나
+    'Connection reset by peer'로 그 요약이 날아간다. 실제로 10분이면 끝날 생성이
+    잠들었다 깨기를 반복하며 9시간 넘게 절반만 진행된 적이 있음. 요청 타임아웃으로는
+    못 막는다 - 프로세스가 멈춰 있는 동안엔 타이머도 같이 멈추니까.
+
+    -i는 유휴 절전만 막는다(뚜껑을 덮으면 어차피 잔다). -w로 서버 pid를 물려두면
+    서버가 죽었을 때 caffeinate가 혼자 남아 맥을 계속 깨워두는 일이 없다.
+    """
+    try:
+        proc = subprocess.Popen(["caffeinate", "-i", "-w", str(os.getpid())])
+    except OSError as e:  # 맥이 아니거나 caffeinate가 없으면 그냥 진행
+        print(f"절전 방지를 걸지 못했어요(생성은 계속): {e}", flush=True)
+        proc = None
+    try:
+        yield
+    finally:
+        if proc is not None:
+            proc.terminate()
+
+
 def ensure_today_cache_started(force=False):
     """논블로킹(HTTP 핸들러용): 오늘 캐시가 있으면 반환. 없으면(또는 force=True로 재생성
     요청이면) 백그라운드 스레드로 생성을 시작해두고 None을 반환 -> 호출부는 '생성 중'
@@ -610,7 +637,8 @@ def ensure_today_cache_started(force=False):
         def _run():
             global _generating
             try:
-                _save_cache(_build_today_data())
+                with _keep_awake():
+                    _save_cache(_build_today_data())
             except Exception as e:
                 # 실패해도 서버는 안 죽음 - _generating만 풀어주면 다음 새로고침 때 재시도됨
                 print(f"오늘자 캐시 생성 실패, 다음 요청에서 재시도: {e}")
