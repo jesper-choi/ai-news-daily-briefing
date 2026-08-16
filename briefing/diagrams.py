@@ -18,9 +18,11 @@ from .config import log
 # 직접 돌리면 멀쩡해서 알아채기 어렵다 -> 흔한 설치 위치를 직접 확인한다.
 D2_FALLBACK_PATHS = ("/opt/homebrew/bin/d2", "/usr/local/bin/d2")
 
-D2_BLOCK = re.compile(r"```d2[ \t]*\n(.*?)```", re.S)
-# 렌더가 끝난 블록. 안에는 d2 소스가 아니라 완성된 <svg>가 들어있다.
-D2_SVG_BLOCK = re.compile(r"```d2svg[ \t]*\n(.*?)```", re.S)
+# 대소문자를 안 가린다: 모델이 ```D2 로 쓰면 못 잡고 코드가 화면에 그대로 노출됨.
+D2_BLOCK = re.compile(r"```d2[ \t]*\n(.*?)```", re.S | re.I)
+# 토큰 한도에 걸려 응답이 잘리면 닫는 ```가 없어서 위 정규식이 못 잡는다. 남은 펜스는
+# 통째로 지운다 - 어차피 잘린 다이어그램이라 살릴 수도 없고, 노출되면 흉함.
+D2_DANGLING = re.compile(r"```d2[ \t]*\n.*\Z", re.S | re.I)
 # 라이트/다크 테마를 둘 다 넣으면 d2가 prefers-color-scheme 미디어쿼리를 SVG 안에
 # 같이 넣어줘서, 한 장으로 두 모드를 다 커버한다.
 D2_ARGS = ["--theme=0", "--dark-theme=200", "--pad=8"]
@@ -94,4 +96,9 @@ def bake_diagrams(text):
         svg = render_d2(code)
         return f"```d2svg\n{svg}\n```" if svg else ""
 
-    return D2_BLOCK.sub(replace, text)
+    return D2_DANGLING.sub("", D2_BLOCK.sub(replace, text)).rstrip()
+
+
+def strip_diagrams(text):
+    """d2 블록을 컴파일하지 않고 그냥 제거 (그림이 들어갈 자리가 아닌 곳용)."""
+    return D2_DANGLING.sub("", D2_BLOCK.sub("", text)).strip()
