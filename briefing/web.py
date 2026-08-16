@@ -9,21 +9,26 @@ from .repository import available_dates, load_cache_for_date
 from .service import ensure_today_cache_started, is_generating
 
 
-_MERMAID_BLOCK = re.compile(r"```mermaid[ \t]*\n(.*?)```", re.S)
-
 def _text_paragraphs(text):
     parts = [html.escape(p.strip()) for p in re.split(r"\n\s*\n", text) if p.strip()]
     return "".join(f"<p>{p}</p>" for p in parts)
 
+# d2svg는 생성 시점에 이미 컴파일된 SVG(diagrams.bake_diagrams), mermaid는 d2로 넘어가기
+# 전에 만들어진 옛 날짜 캐시용. 옛 캐시를 다시 만들 수는 없으니 그쪽 경로는 남겨둔다.
+_BLOCK = re.compile(r"```(d2svg|mermaid)[ \t]*\n(.*?)```", re.S)
+
+
 def paragraphs_html(text):
-    """빈 줄로 구분된 텍스트를 <p>로, ```mermaid 블록은 다이어그램으로 변환 (내용은 escape).
-    다이어그램은 여기선 원문 그대로 심어두고 브라우저에서 mermaid가 그린다."""
+    """빈 줄로 구분된 텍스트를 <p>로, 코드블록은 다이어그램으로 변환.
+    본문은 escape하지만 d2svg 블록만은 이미 우리가 만든 SVG라 그대로 심는다."""
     out, pos = [], 0
-    for m in _MERMAID_BLOCK.finditer(text):
+    for m in _BLOCK.finditer(text):
         out.append(_text_paragraphs(text[pos:m.start()]))
-        code = m.group(1).strip()
-        if code:
-            out.append(f'<div class="diagram"><pre class="mermaid">{html.escape(code)}</pre></div>')
+        kind, body = m.group(1), m.group(2).strip()
+        if body and kind == "d2svg":
+            out.append(f'<div class="diagram">{body}</div>')
+        elif body:  # 옛 mermaid 캐시: 원문을 심어두고 브라우저에서 그린다
+            out.append(f'<div class="diagram"><pre class="mermaid">{html.escape(body)}</pre></div>')
         pos = m.end()
     out.append(_text_paragraphs(text[pos:]))
     return "".join(out) or f"<p>{html.escape(text)}</p>"
