@@ -54,10 +54,14 @@ def test_call_tally_per_day_and_model():
 
 def test_err_note_extracts_quota_id():
     """로그에서 하루치 소진(PerDay)과 잠깐 몰린 것(PerMinute)을 구분할 수 있어야 함."""
-    per_day = ('429 RESOURCE_EXHAUSTED. {"error": {"code": 429, "message": "You exceeded your '
-               'current quota", "details": [{"violations": [{"quotaMetric": "generate_requests", '
-               '"quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier"}]}]}}')
+    # 실제 APIError.str()은 JSON이 아니라 dict repr이라 작은따옴표로 나온다. 처음엔 이
+    # 샘플을 큰따옴표로 지어내는 바람에 테스트는 통과하는데 실제 로그는 안 잡혔음.
+    per_day = ("429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your "
+               "current quota', 'details': [{'violations': [{'quotaMetric': 'generate_requests', "
+               "'quotaId': 'GenerateRequestsPerDayPerProjectPerModel-FreeTier'}]}]}}")
     assert server._err_note(per_day) == "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+    per_minute = "429 RESOURCE_EXHAUSTED. {'quotaId': 'GenerateRequestsPerMinutePerProjectPerModel'}"
+    assert server._err_note(per_minute) == "GenerateRequestsPerMinutePerProjectPerModel"
     assert server._err_note("503 UNAVAILABLE. high demand") == "503 UNAVAILABLE. high demand"
 
 
