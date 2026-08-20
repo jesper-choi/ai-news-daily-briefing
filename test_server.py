@@ -8,7 +8,7 @@ import re
 import shutil
 import time
 
-from briefing import diagrams, llm, service, summarize
+from briefing import diagrams, llm, service, sources, summarize
 
 TODAY = "2026-01-01"
 
@@ -159,6 +159,65 @@ def test_d2_edge_cases():
     # abstract 자리에 그림이 오면 컴파일하지 않고 제거
     ab = diagrams.strip_diagrams(f"핵심 요약 두 문장.\n\n{fence}d2\na -> b\n{fence}")
     assert ab == "핵심 요약 두 문장." and "svg" not in ab, repr(ab)
+
+
+def test_listing_retries_transient_errors():
+    """목록 요청이 429 한 번에 무너지면 그 섹션이 그날 통째로 빈다 (실제로 HN이 그랬음)."""
+    calls = []
+
+    class Resp:
+        def __init__(self, code):
+            self.status_code = code
+        def raise_for_status(self):
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+    codes = [429, 200]
+    real_get, real_sleep = sources.requests.get, sources.time.sleep
+    sources.requests.get = lambda url, **kw: (calls.append(url), Resp(codes[len(calls) - 1]))[1]
+    sources.time.sleep = lambda s: None
+    try:
+        assert sources._get_listing("http://x", wait=0).status_code == 200
+        assert len(calls) == 2, calls
+        # 재시도해도 계속 실패하면 예외를 올려서 _fetch_source가 섹션을 비우게 둔다
+        calls.clear()
+        codes[:] = [429, 429, 429]
+        try:
+            sources._get_listing("http://x", wait=0)
+            raise AssertionError("예외가 안 났음")
+        except RuntimeError:
+            pass
+        assert len(calls) == 3, calls
+        # 404처럼 재시도가 의미 없는 건 바로 포기
+        calls.clear()
+        codes[:] = [404]
+        try:
+            sources._get_listing("http://x", wait=0)
+            raise AssertionError("예외가 안 났음")
+        except RuntimeError:
+            pass
+        assert len(calls) == 1, calls
+    finally:
+        sources.requests.get, sources.time.sleep = real_get, real_sleep
+
+
+def test_relative_links_become_absolute():
+    """GeekNews의 Show GN 글은 href가 'topic?id=32632' 상대경로 -> 그대로 두면
+    '원문 보기'가 깨지고 본문 추출도 MissingSchema로 실패한다."""
+    html = ('<div class="topic_row" data-topic-state-id="32632">'
+            '<span class="topictitle"><a href="topic?id=32632">Show GN: 테스트</a></span>'
+            '</div>')
+
+    class Resp:
+        status_code, text = 200, html
+        def raise_for_status(self): pass
+
+    real = sources.requests.get
+    sources.requests.get = lambda url, **kw: Resp()
+    try:
+        item = sources.fetch_top20()[0]
+    finally:
+        sources.requests.get = real
+    assert item["link"] == "https://news.hada.io/topic?id=32632", item["link"]
 
 
 def test_no_model_left():
