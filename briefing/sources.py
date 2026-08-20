@@ -2,6 +2,7 @@
 바깥 사이트가 죽거나 형식이 바뀌는 건 여기서 흡수하고, 위 계층엔 dict 리스트만 넘긴다."""
 import json
 import re
+import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
@@ -13,9 +14,27 @@ from .config import (BASE_URL, CANDIDATE_N, HEADERS, HN_URL, NEWSLETTER_DAYS,
                      NEWSLETTER_URL, log)
 
 
-def fetch_top20(n=CANDIDATE_N):
-    resp = requests.get(BASE_URL, headers=HEADERS, timeout=15)
+def _get_listing(url, tries=3, wait=5):
+    """목록 페이지를 가져온다. 일시적인 429/5xx면 잠깐 쉬었다 다시 시도.
+
+    한 번 실패하면 그 섹션이 통째로 빈다 - 실제로 HN이 429를 한 번 뱉는 바람에
+    그날 브리핑에서 Hacker News 10건이 전부 날아갔다. 목록은 생성 한 번에 한 번만
+    부르는 요청이라 몇 초 기다렸다 다시 거는 값이 충분히 싸다."""
+    for attempt in range(tries):
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        if resp.status_code < 400:
+            return resp
+        if attempt < tries - 1 and resp.status_code in (429, 500, 502, 503, 504):
+            log("출처", f"{url} {resp.status_code} -> {wait * (attempt + 1)}초 후 재시도")
+            time.sleep(wait * (attempt + 1))
+            continue
+        break
     resp.raise_for_status()
+    return resp
+
+
+def fetch_top20(n=CANDIDATE_N):
+    resp = _get_listing(BASE_URL)
     soup = BeautifulSoup(resp.text, "html.parser")
     items = []
     for row in soup.select("div.topic_row")[:n]:
@@ -29,7 +48,9 @@ def fetch_top20(n=CANDIDATE_N):
         items.append({
             "rank": len(items) + 1,
             "title": title_a.get_text(strip=True),
-            "link": title_a["href"],
+            # Show GN 같은 자체 글은 href가 'topic?id=32632' 처럼 상대경로로 온다.
+            # 그대로 두면 '원문 보기'가 깨지고 본문 추출도 MissingSchema로 실패함.
+            "link": urllib.parse.urljoin(BASE_URL, title_a["href"]),
             "domain": domain.get_text(strip=True).strip("()") if domain else "",
             "excerpt": desc_a.get_text(strip=True) if desc_a else "",
             "points": points_span.get_text(strip=True) if points_span else "0",
@@ -38,8 +59,7 @@ def fetch_top20(n=CANDIDATE_N):
     return items
 
 def fetch_hn_top(n=CANDIDATE_N):
-    resp = requests.get(HN_URL, headers=HEADERS, timeout=15)
-    resp.raise_for_status()
+    resp = _get_listing(HN_URL)
     soup = BeautifulSoup(resp.text, "html.parser")
     items = []
     for row in soup.select("tr.athing")[:n]:
@@ -53,7 +73,8 @@ def fetch_hn_top(n=CANDIDATE_N):
         items.append({
             "rank": len(items) + 1,
             "title": title_a.get_text(strip=True),
-            "link": title_a["href"],
+            # Ask HN 등 자체 글도 'item?id=...' 상대경로로 온다 (GeekNews와 같은 이유)
+            "link": urllib.parse.urljoin(HN_URL, title_a["href"]),
             "domain": site.get_text(strip=True) if site else "news.ycombinator.com",
             "excerpt": "",
             "points": score_el.get_text(strip=True).split()[0] if score_el else "0",
@@ -81,8 +102,7 @@ def fetch_newsletter_recent(days=NEWSLETTER_DAYS, scan=8):
     """AI Engineering 뉴스레터에서 최근 days일 안에 나온 글만 가져온다.
     주 2회꼴이라 보통 1~3개이고, 그 주에 글이 없으면 빈 리스트(=섹션이 통째로 숨겨짐)."""
     try:
-        resp = requests.get(NEWSLETTER_URL, headers=HEADERS, timeout=15)
-        resp.raise_for_status()
+        resp = _get_listing(NEWSLETTER_URL)
     except requests.RequestException as e:
         log("출처", f"뉴스레터 목록을 가져오지 못함(이 섹션은 건너뜀): {type(e).__name__}: {e}")
         return []
