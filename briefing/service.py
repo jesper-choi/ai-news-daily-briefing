@@ -7,11 +7,31 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import date, datetime
+from typing import NamedTuple
 
-from .config import NEWSLETTER_DAYS, log
+from .config import AUTOGEN_INTERVAL, FETCH_WORKERS, NEWSLETTER_DAYS, log
 from .repository import _save_cache, load_cache_for_date
 from .sources import fetch_hn_top, fetch_newsletter_recent, fetch_source_text, fetch_top20
 from .summarize import SUMMARY_FAILED_MSG, select_ai_related, summarize_ko
+
+
+class Source(NamedTuple):
+    key: str      # 캐시 JSON과 CSS에서 쓰는 이름
+    label: str    # 페이지에 보이는 섹션 제목
+    fetch: object  # 후보 목록을 가져오는 함수
+    pick: bool    # Gemini로 AI 관련성 상위 PICK_N개만 고를지
+
+
+# 소스는 여기서만 선언한다. 새 소스를 붙이려면 sources.py에 fetch 함수를 하나 쓰고
+# 이 목록에 한 줄 더하면 끝 - 예전엔 _build_today_data 안에서 가져오기·선별·섹션 조립을
+# 각각 따로 적어야 해서 세 군데를 고쳐야 했다.
+# 목록 순서가 곧 화면 순서다. 개수가 가장 적은 뉴스레터를 맨 위에 두고, 뒤 소스는 앞
+# 소스가 이미 가져간 링크를 버린다(GeekNews가 HN 글을 재수집하는 경우가 잦음).
+SOURCES = [
+    Source("newsletter", f"AI Engineering · 최근 {NEWSLETTER_DAYS}일", fetch_newsletter_recent, pick=False),
+    Source("geeknews", "GeekNews", fetch_top20, pick=True),
+    Source("hn", "Hacker News", fetch_hn_top, pick=True),
+]
 
 
 def build_section(items):
@@ -19,7 +39,7 @@ def build_section(items):
     if not items:
         return items
     # Article bodies are plain HTTP fetches (no rate limit) -> safe to parallelize.
-    with ThreadPoolExecutor(max_workers=6) as pool:
+    with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool:
         sources = list(pool.map(fetch_source_text, items))
 
     # Gemini free-tier caps requests/min -> summarize sequentially (summarize_ko paces itself).
@@ -44,46 +64,26 @@ def _fetch_source(label, fetch):
 
 def _build_today_data():
     """오늘자 데이터를 실제로 크롤링+요약해서 만든다 (몇 분 걸림). 디스크에 쓰지 않고 반환만."""
-    today = date.today().isoformat()
-    geeknews = select_ai_related(_fetch_source("GeekNews", fetch_top20))
-    seen_links = {it["link"] for it in geeknews}
-    # GeekNews often re-curates the same story from HN -> drop exact URL dupes, HN loses the tie
-    hn_candidates = [it for it in _fetch_source("Hacker News", fetch_hn_top)
-                     if it["link"] not in seen_links]
-    hn = select_ai_related(hn_candidates)
-    for i, it in enumerate(geeknews, 1):
-        it["rank"] = i
-    for i, it in enumerate(hn, 1):
-        it["rank"] = i
+    sections, seen_links = [], set()
+    for source in SOURCES:
+        items = [it for it in _fetch_source(source.label, source.fetch)
+                 if it["link"] not in seen_links]
+        if source.pick:
+            items = select_ai_related(items)
+        seen_links.update(it["link"] for it in items)
+        for rank, it in enumerate(items, 1):
+            it["rank"] = rank
+        sections.append({"key": source.key, "label": source.label, "items": items})
 
-    # 뉴스레터는 전부 AI 엔지니어링 글이라 select_ai_related(=Gemini 1콜)를 건너뛴다.
-    newsletter = _fetch_source("AI Engineering", fetch_newsletter_recent)
-
-    build_section(geeknews)
-    build_section(hn)
-    build_section(newsletter)
+    for section in sections:
+        build_section(section["items"])
 
     return {
-        "date": today,
+        "date": date.today().isoformat(),
         "generated_at": datetime.now().isoformat(),
-        # 뉴스레터가 개수가 가장 적으니 맨 위에. 그 주에 글이 없어 섹션이 통째로 빠지면
-        # GeekNews가 첫 섹션이 되고, 첫 섹션 스타일(:first-child)도 자동으로 따라감.
-        "sections": [
-            {"key": "newsletter", "label": f"AI Engineering · 최근 {NEWSLETTER_DAYS}일", "items": newsletter},
-            {"key": "geeknews", "label": "GeekNews", "items": geeknews},
-            {"key": "hn", "label": "Hacker News", "items": hn},
-        ],
+        "sections": sections,
     }
 
-def ensure_today_cache():
-    """블로킹: 오늘 캐시가 있으면 로드, 없으면 지금 당장 만들어서 반환 (CLI/스크립트용)."""
-    today = date.today().isoformat()
-    cached = load_cache_for_date(today)
-    if cached is not None:
-        return cached
-    data = _build_today_data()
-    _save_cache(data)
-    return data
 
 _generation_lock = threading.Lock()
 
@@ -164,7 +164,7 @@ def _daily_autogen_loop():
     """서버가 계속 떠 있으면, 아무도 접속 안 해도 날짜가 바뀌는 순간(자정 이후) 알아서
     그날 캐시 생성을 시작해준다. 이미 있거나 생성 중이면 그냥 아무것도 안 하는 가벼운 체크."""
     while True:
-        time.sleep(1800)  # 30분마다 체크
+        time.sleep(AUTOGEN_INTERVAL)
         try:
             ensure_today_cache_started()
         except Exception as e:

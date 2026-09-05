@@ -227,6 +227,30 @@ def test_relative_links_become_absolute():
     assert item["link"] == "https://news.hada.io/topic?id=32632", item["link"]
 
 
+def test_sources_registry_dedupes_and_picks():
+    """SOURCES 선언대로 섹션이 만들어지고, 뒤 소스는 앞 소스가 가져간 링크를 버려야 함.
+    (GeekNews가 HN 글을 재수집하는 경우가 잦아서 중복 제거가 필요하다)"""
+    dup = {"link": "https://same.example/a", "title": "겹치는 글"}
+    only = {"link": "https://only.example/b", "title": "HN 전용"}
+    fake = [
+        service.Source("first", "첫 소스", lambda: [dict(dup)], pick=False),
+        service.Source("second", "둘째 소스", lambda: [dict(dup), dict(only)], pick=False),
+    ]
+    real_sources, real_build = service.SOURCES, service.build_section
+    service.SOURCES, service.build_section = fake, lambda items: items
+    try:
+        data = service._build_today_data()
+    finally:
+        service.SOURCES, service.build_section = real_sources, real_build
+    assert [s["key"] for s in data["sections"]] == ["first", "second"]
+    assert [s["label"] for s in data["sections"]] == ["첫 소스", "둘째 소스"]
+    assert len(data["sections"][0]["items"]) == 1
+    # 겹치는 링크는 뒤 소스에서 빠지고, 남은 항목의 rank는 1부터 다시 매겨진다
+    second = data["sections"][1]["items"]
+    assert [it["link"] for it in second] == [only["link"]], second
+    assert second[0]["rank"] == 1
+
+
 def test_no_model_left():
     reset()
     for model, _ in llm.MODELS:

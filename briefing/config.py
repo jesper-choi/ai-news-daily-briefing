@@ -36,6 +36,15 @@ CANDIDATE_N = 20  # 각 소스에서 우선 훑어볼 후보 개수
 PICK_N = 10  # 그중 AI 관련성 순으로 골라낼 개수
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; news-clrawler/1.0)"}
 
+# 목록 페이지는 생성당 한 번뿐이라 넉넉히, 기사 본문은 수십 개를 도니까 짧게 잡는다.
+LISTING_TIMEOUT = 15
+ARTICLE_TIMEOUT = 10
+# 기사 본문 크롤링은 남의 서버에 거는 평범한 HTTP라 병렬로 돌려도 된다
+# (Gemini 호출은 분당 한도가 있어서 순차로 돈다 - service.build_section 참고).
+FETCH_WORKERS = 6
+# 서버가 계속 떠 있을 때 날짜가 바뀐 걸 알아채는 주기(초)
+AUTOGEN_INTERVAL = 1800
+
 
 def log(tag, msg):
     """운영 로그 한 줄. launchd가 stdout을 파일로 받으면 tty가 아니라 블록 버퍼링이

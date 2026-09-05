@@ -10,21 +10,33 @@ from datetime import date, timedelta
 import requests
 from bs4 import BeautifulSoup
 
-from .config import (BASE_URL, CANDIDATE_N, HEADERS, HN_URL, NEWSLETTER_DAYS,
-                     NEWSLETTER_URL, log)
+from .config import (ARTICLE_TIMEOUT, BASE_URL, CANDIDATE_N, FETCH_WORKERS, HEADERS,
+                     HN_URL, LISTING_TIMEOUT, NEWSLETTER_DAYS, NEWSLETTER_URL, log)
+
+# 목록 요청 재시도: 429/5xx면 이 간격(초)에 시도 횟수를 곱해 쉬었다 다시 건다.
+LISTING_TRIES, LISTING_WAIT = 3, 5
+RETRYABLE = (429, 500, 502, 503, 504)
+# 기사 본문에서 이만큼만 잘라 요약에 넘긴다 (프롬프트가 지나치게 길어지지 않게)
+ARTICLE_MAX_CHARS = 12000
+# 뉴스레터 목록에서 앞쪽 몇 개나 열어볼지 (전부 열면 매번 12번씩 요청하게 됨)
+NEWSLETTER_SCAN = 8
+# 봇 차단 문구 검사는 짧은 추출물에만 적용한다 - 캡차를 '다루는' 진짜 기사를 거르지 않도록
+BOT_WALL_MAX_CHARS = 600
+# 토픽 페이지 폴백을 쓸 수 있는지 판별하는 표식 (GeekNews 자체 정리글이 여기 있음)
+GEEKNEWS_TOPIC_MARK = urllib.parse.urlparse(BASE_URL).netloc + "/topic"
 
 
-def _get_listing(url, tries=3, wait=5):
+def _get_listing(url, tries=LISTING_TRIES, wait=LISTING_WAIT):
     """목록 페이지를 가져온다. 일시적인 429/5xx면 잠깐 쉬었다 다시 시도.
 
     한 번 실패하면 그 섹션이 통째로 빈다 - 실제로 HN이 429를 한 번 뱉는 바람에
     그날 브리핑에서 Hacker News 10건이 전부 날아갔다. 목록은 생성 한 번에 한 번만
     부르는 요청이라 몇 초 기다렸다 다시 거는 값이 충분히 싸다."""
     for attempt in range(tries):
-        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp = requests.get(url, headers=HEADERS, timeout=LISTING_TIMEOUT)
         if resp.status_code < 400:
             return resp
-        if attempt < tries - 1 and resp.status_code in (429, 500, 502, 503, 504):
+        if attempt < tries - 1 and resp.status_code in RETRYABLE:
             log("출처", f"{url} {resp.status_code} -> {wait * (attempt + 1)}초 후 재시도")
             time.sleep(wait * (attempt + 1))
             continue
@@ -54,7 +66,8 @@ def fetch_top20(n=CANDIDATE_N):
             "domain": domain.get_text(strip=True).strip("()") if domain else "",
             "excerpt": desc_a.get_text(strip=True) if desc_a else "",
             "points": points_span.get_text(strip=True) if points_span else "0",
-            "discuss_url": f"https://news.hada.io/topic?id={topic_id}",
+            # id가 비면 'topic?id=' 같은 깨진 링크가 카드에 박히므로 아예 만들지 않는다
+            "discuss_url": urllib.parse.urljoin(BASE_URL, f"topic?id={topic_id}") if topic_id else "",
         })
     return items
 
@@ -75,10 +88,10 @@ def fetch_hn_top(n=CANDIDATE_N):
             "title": title_a.get_text(strip=True),
             # Ask HN 등 자체 글도 'item?id=...' 상대경로로 온다 (GeekNews와 같은 이유)
             "link": urllib.parse.urljoin(HN_URL, title_a["href"]),
-            "domain": site.get_text(strip=True) if site else "news.ycombinator.com",
+            "domain": site.get_text(strip=True) if site else urllib.parse.urlparse(HN_URL).netloc,
             "excerpt": "",
             "points": score_el.get_text(strip=True).split()[0] if score_el else "0",
-            "discuss_url": f"https://news.ycombinator.com/item?id={item_id}",
+            "discuss_url": urllib.parse.urljoin(HN_URL, f"item?id={item_id}") if item_id else "",
         })
     return items
 
@@ -86,7 +99,7 @@ def _beehiiv_post_meta(url):
     """포스트 페이지의 JSON-LD에서 (발행일, 제목, 설명)을 뽑는다. 실패하면 None.
     beehiiv는 RSS를 안 주고 목록 페이지에도 날짜가 없어서 글마다 한 번씩 열어봐야 함."""
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp = requests.get(url, headers=HEADERS, timeout=LISTING_TIMEOUT)
         if resp.status_code != 200:
             return None
         soup = BeautifulSoup(resp.text, "html.parser")
@@ -98,23 +111,21 @@ def _beehiiv_post_meta(url):
         return None
     return None
 
-def fetch_newsletter_recent(days=NEWSLETTER_DAYS, scan=8):
+def fetch_newsletter_recent(days=NEWSLETTER_DAYS, scan=NEWSLETTER_SCAN):
     """AI Engineering 뉴스레터에서 최근 days일 안에 나온 글만 가져온다.
-    주 2회꼴이라 보통 1~3개이고, 그 주에 글이 없으면 빈 리스트(=섹션이 통째로 숨겨짐)."""
-    try:
-        resp = _get_listing(NEWSLETTER_URL)
-    except requests.RequestException as e:
-        log("출처", f"뉴스레터 목록을 가져오지 못함(이 섹션은 건너뜀): {type(e).__name__}: {e}")
-        return []
+    주 2회꼴이라 보통 1~3개이고, 그 주에 글이 없으면 빈 리스트(=섹션이 통째로 숨겨짐).
 
+    실패하면 예외를 그대로 올린다 - 다른 소스와 똑같이 service._fetch_source가 받아서
+    로그를 남기고 그 섹션만 비운다(예전엔 여기서 따로 잡아 두 곳에서 처리했음)."""
+    resp = _get_listing(NEWSLETTER_URL)
     soup = BeautifulSoup(resp.text, "html.parser")
     hrefs = list(dict.fromkeys(
         a["href"] for a in soup.select("a[href]") if "/p/" in a["href"]
     ))
-    # 목록이 최신순이라 앞쪽 몇 개만 봐도 충분함 (전부 열면 매번 12번씩 요청하게 됨)
+    # 목록이 최신순이라 앞쪽 몇 개만 봐도 충분함
     urls = [urllib.parse.urljoin(NEWSLETTER_URL, h) for h in hrefs[:scan]]
 
-    with ThreadPoolExecutor(max_workers=6) as pool:
+    with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool:
         metas = list(pool.map(_beehiiv_post_meta, urls))
 
     cutoff = (date.today() - timedelta(days=days)).isoformat()
@@ -129,7 +140,7 @@ def fetch_newsletter_recent(days=NEWSLETTER_DAYS, scan=8):
             "rank": len(items) + 1,
             "title": headline or url.rsplit("/", 1)[-1].replace("-", " "),
             "link": url,
-            "domain": "aiengineering.beehiiv.com",
+            "domain": urllib.parse.urlparse(NEWSLETTER_URL).netloc,
             "excerpt": description,
             "points": "",  # 뉴스레터엔 추천수/토론 스레드가 없음 -> 카드에서 발행일로 대체
             "discuss_url": "",
@@ -147,10 +158,10 @@ _BOT_WALL_MARKERS = (
     "sign in to", "log in to", "subscribe to continue", "cookies to continue",
 )
 
-def fetch_article_text(url, max_chars=12000):
+def fetch_article_text(url, max_chars=ARTICLE_MAX_CHARS):
     """원문 기사 본문을 최선을 다해 추출. 실패하면 None (호출부에서 excerpt로 대체)."""
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=10)
+        resp = requests.get(url, headers=HEADERS, timeout=ARTICLE_TIMEOUT)
         if resp.status_code != 200 or "html" not in resp.headers.get("content-type", ""):
             return None
         soup = BeautifulSoup(resp.text, "html.parser")
@@ -164,7 +175,7 @@ def fetch_article_text(url, max_chars=12000):
         text = re.sub(r"\s+", " ", text).strip()
         if not text:
             return None
-        if len(text) < 600 and any(m in text.lower() for m in _BOT_WALL_MARKERS):
+        if len(text) < BOT_WALL_MAX_CHARS and any(m in text.lower() for m in _BOT_WALL_MARKERS):
             return None
         return text[:max_chars]
     except Exception as e:
@@ -174,12 +185,12 @@ def fetch_article_text(url, max_chars=12000):
         log("출처", f"본문 추출 실패({url[:60]}): {type(e).__name__}: {str(e)[:60]}")
         return None
 
-def fetch_geeknews_topic(discuss_url, max_chars=12000):
+def fetch_geeknews_topic(discuss_url, max_chars=ARTICLE_MAX_CHARS):
     """GeekNews 토픽 페이지의 자체 한국어 요약을 가져온다. 원문이 봇 차단/유튜브 등으로
     막혔을 때의 대체 소스 - 목록 excerpt는 이 요약의 첫 줄만 잘라온 거라 90자뿐이지만,
     토픽 페이지엔 5천~1만자짜리 정리가 통째로 있다."""
     try:
-        resp = requests.get(discuss_url, headers=HEADERS, timeout=10)
+        resp = requests.get(discuss_url, headers=HEADERS, timeout=ARTICLE_TIMEOUT)
         if resp.status_code != 200:
             return None
         soup = BeautifulSoup(resp.text, "html.parser")
@@ -200,7 +211,7 @@ def fetch_source_text(item):
     text = fetch_article_text(item["link"])
     if text:
         return text, "article"
-    if "news.hada.io/topic" in item.get("discuss_url", ""):
+    if GEEKNEWS_TOPIC_MARK in item.get("discuss_url", ""):
         topic = fetch_geeknews_topic(item["discuss_url"])
         if topic:
             return topic, "topic"
