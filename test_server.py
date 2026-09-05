@@ -251,6 +251,56 @@ def test_sources_registry_dedupes_and_picks():
     assert second[0]["rank"] == 1
 
 
+def test_aborts_when_machine_slept():
+    """맥이 자면 생성을 접어야 한다. 이어가면 끊긴 연결로 실패만 쌓이고, 실제로
+    12분이면 끝날 생성이 11시간 걸린 날이 있었다."""
+    service._slept.clear()
+    try:
+        service._abort_if_slept()  # 안 잤으면 아무 일도 없어야
+        service._slept.set()
+        try:
+            service._abort_if_slept()
+            raise AssertionError("중단되지 않았음")
+        except service.MachineSlept:
+            pass
+        # build_section도 항목을 돌기 전에 걸러야 한다 (요약 호출이 나가면 안 됨)
+        called = []
+        real = service.summarize_ko
+        service.summarize_ko = lambda *a: called.append(1)
+        try:
+            service.build_section([{"link": "x", "title": "t"}])
+            raise AssertionError("중단되지 않았음")
+        except service.MachineSlept:
+            assert called == [], "잤는데도 요약을 불렀음"
+        finally:
+            service.summarize_ko = real
+    finally:
+        service._slept.clear()
+
+
+def test_sleep_watch_detects_time_jump():
+    """감시 스레드는 '깨어나 보니 시계가 훌쩍 뛰어 있다'로 잠을 알아챈다."""
+    service._slept.clear()
+    real_tick, real_gap, real_time = service.SLEEP_TICK, service.SLEEP_GAP, service.time.time
+    clock = [1000.0]
+    service.SLEEP_TICK, service.SLEEP_GAP = 0.02, 100
+    service.time.time = lambda: clock[0]
+    try:
+        with service._watch_for_sleep():
+            time.sleep(0.1)
+            assert not service._slept.is_set(), "안 잤는데 잤다고 판단"
+            clock[0] += 1200  # 20분 순간이동 = 그 사이 잠들어 있었다는 뜻
+            for _ in range(50):
+                if service._slept.is_set():
+                    break
+                time.sleep(0.02)
+        assert service._slept.is_set(), "시계가 20분 뛰었는데 못 알아챔"
+    finally:
+        service.SLEEP_TICK, service.SLEEP_GAP = real_tick, real_gap
+        service.time.time = real_time
+        service._slept.clear()
+
+
 def test_no_model_left():
     reset()
     for model, _ in llm.MODELS:

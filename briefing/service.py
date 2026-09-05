@@ -10,6 +10,17 @@ from datetime import date, datetime
 from typing import NamedTuple
 
 from .config import AUTOGEN_INTERVAL, FETCH_WORKERS, NEWSLETTER_DAYS, log
+
+# 맥이 잔 걸 알아채는 방법: 감시 스레드가 SLEEP_TICK초마다 깨어나 시계를 본다.
+# 그 사이 SLEEP_GAP초 넘게 흘렀으면 프로세스가 그동안 얼어 있었다는 뜻이다
+# (자는 동안엔 스레드도 같이 멈추므로 sleep(30)이 20분처럼 보인다).
+SLEEP_TICK = 30
+SLEEP_GAP = 120
+_slept = threading.Event()
+
+
+class MachineSlept(RuntimeError):
+    """생성 도중 맥이 잤다. 그대로 이어가면 끊긴 연결로 실패만 쌓이므로 접는다."""
 from .repository import save_cache, load_cache_for_date
 from .sources import fetch_hn_top, fetch_newsletter_recent, fetch_source_text, fetch_top20
 from .summarize import SUMMARY_FAILED_MSG, select_ai_related, summarize_ko
@@ -38,12 +49,14 @@ def build_section(items):
     """항목 리스트에 원문 크롤링 + Gemini 요약을 채워넣는다 (in place, 리스트도 반환)."""
     if not items:
         return items
+    _abort_if_slept()
     # Article bodies are plain HTTP fetches (no rate limit) -> safe to parallelize.
     with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool:
         sources = list(pool.map(fetch_source_text, items))
 
     # Gemini free-tier caps requests/min -> summarize sequentially (summarize_ko paces itself).
     for item, (source_text, source_kind) in zip(items, sources):
+        _abort_if_slept()
         result = summarize_ko(item, source_text)
         item["abstract"] = result["abstract"]
         item["detail"] = result["detail"]
@@ -100,6 +113,36 @@ def _result_line(data, started):
     sections = " ".join(f"{s['key']}={len(s['items'])}" for s in data["sections"])
     return (f"{data['date']} 완료 {(time.time() - started) / 60:.1f}분 | {sections} | "
             f"항목 {len(items)} 요약실패 {failed}")
+
+
+def _abort_if_slept():
+    """맥이 잤으면 생성을 여기서 끊는다. 요약 하나 만들 때마다 확인한다."""
+    if _slept.is_set():
+        raise MachineSlept("맥이 자는 동안 연결이 끊겼습니다")
+
+
+@contextmanager
+def _watch_for_sleep():
+    """맥이 자는지 지켜보는 감시 스레드. 자는 동안엔 이 스레드도 같이 멈추므로,
+    깨어나서 시계를 보면 예상보다 훨씬 많이 지나 있다 - 그게 잠들었다는 신호다."""
+    _slept.clear()
+    stop = threading.Event()
+
+    def tick():
+        last = time.time()
+        while not stop.wait(SLEEP_TICK):
+            now = time.time()
+            if now - last > SLEEP_GAP:
+                log("생성", f"{(now - last) / 60:.0f}분 공백 - 맥이 잔 것으로 보고 생성을 접습니다")
+                _slept.set()
+                return
+            last = now
+
+    threading.Thread(target=tick, daemon=True).start()
+    try:
+        yield
+    finally:
+        stop.set()
 
 
 @contextmanager
@@ -165,10 +208,15 @@ def ensure_today_cache_started(force=False):
             try:
                 started = time.time()
                 log("생성", f"{date.today().isoformat()} 시작" + (" (다시 생성)" if force else ""))
-                with _keep_awake():
+                with _keep_awake(), _watch_for_sleep():
                     data = _build_today_data()
                     save_cache(data)
                 log("생성", _result_line(data, started))
+            except MachineSlept as e:
+                # 캐시를 저장하지 않으므로 다음 확인(daily_autogen_loop, 최대 30분)이나
+                # 다음 접속 때 처음부터 다시 만든다. 절반만 된 브리핑을 남기는 것보다,
+                # 깨어 있을 때 12분 만에 온전히 만드는 편이 낫다.
+                log("생성", f"중단: {e} ({(time.time() - started) / 60:.0f}분 진행) -> 다음에 처음부터 다시")
             except Exception as e:
                 # 실패해도 서버는 안 죽음 - _generating만 풀어주면 다음 새로고침 때 재시도됨
                 log("생성", f"실패, 다음 요청에서 재시도: {type(e).__name__}: {e}")
