@@ -6,10 +6,11 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import NamedTuple
 
-from .config import AUTOGEN_INTERVAL, FETCH_WORKERS, GENERATE_HOUR, NEWSLETTER_DAYS, log
+from .config import (AUTOGEN_INTERVAL, FETCH_WORKERS, GENERATE_HOUR, NEWSLETTER_DAYS,
+                     RETRY_AFTER_FAILURE, log)
 
 # 맥이 잔 걸 알아채는 방법: 감시 스레드가 SLEEP_TICK초마다 깨어나 시계를 본다.
 # 그 사이 SLEEP_GAP초 넘게 흘렀으면 프로세스가 그동안 얼어 있었다는 뜻이다
@@ -34,7 +35,7 @@ class Source(NamedTuple):
 
 
 # 소스는 여기서만 선언한다. 새 소스를 붙이려면 sources.py에 fetch 함수를 하나 쓰고
-# 이 목록에 한 줄 더하면 끝 - 예전엔 _build_today_data 안에서 가져오기·선별·섹션 조립을
+# 이 목록에 한 줄 더하면 끝 - 예전엔 _build_data 안에서 가져오기·선별·섹션 조립을
 # 각각 따로 적어야 해서 세 군데를 고쳐야 했다.
 # 목록 순서가 곧 화면 순서다. 개수가 가장 적은 뉴스레터를 맨 위에 두고, 뒤 소스는 앞
 # 소스가 이미 가져간 링크를 버린다(GeekNews가 HN 글을 재수집하는 경우가 잦음).
@@ -77,8 +78,11 @@ def _fetch_source(label, fetch):
         return []
 
 
-def _build_today_data():
-    """오늘자 데이터를 실제로 크롤링+요약해서 만든다 (몇 분 걸림). 디스크에 쓰지 않고 반환만."""
+def _build_data(day):
+    """day자 데이터를 실제로 크롤링+요약해서 만든다 (몇 분 걸림). 디스크에 쓰지 않고 반환만.
+
+    날짜를 인자로 받는 이유: 자정 직전에 시작하면 끝날 때 date.today()가 다음날이 되어
+    엉뚱한 날짜로 저장된다. 시작할 때 정한 날짜를 끝까지 들고 간다."""
     sections, seen_links = [], set()
     for source in SOURCES:
         items = [it for it in _fetch_source(source.label, source.fetch)
@@ -94,15 +98,15 @@ def _build_today_data():
         build_section(section["items"])
 
     return {
-        "date": date.today().isoformat(),
+        "date": day,
         "generated_at": datetime.now().isoformat(),
         "sections": sections,
     }
 
 
 _generation_lock = threading.Lock()
-
-_generating = False
+_generating_day = None  # 지금 만들고 있는 날짜 (없으면 None)
+_last_failure = {}      # 날짜 -> 마지막 실패 시각. 곧바로 재시도하지 않으려고
 
 
 def _result_line(data, started):
@@ -187,68 +191,94 @@ def _power_source():
         return "전원 상태 불명"
 
 
-def ensure_today_cache_started(force=False):
-    """논블로킹(HTTP 핸들러용): 오늘 캐시가 있으면 반환. 없으면(또는 force=True로 재생성
-    요청이면) 백그라운드 스레드로 생성을 시작해두고 None을 반환 -> 호출부는 '생성 중'
-    페이지를 즉시 보여줄 수 있다."""
-    today = date.today().isoformat()
-    if not force:
-        cached = load_cache_for_date(today)
-        if cached is not None:
-            return cached
-        # 아직 이른 시간이면 시작하지 않는다. 자정 직후엔 맥이 자고 있어서 생성이
-        # 잠들었다 깨기를 반복하며 몇 시간씩 걸렸다. 지금 당장 보고 싶으면 '다시
-        # 생성'(force=True)이 있다.
-        if before_generate_hour():
-            return None
+def target_day(now=None):
+    """지금 만들어져 있어야 할 브리핑의 날짜.
 
-    global _generating
-    with _generation_lock:
-        already_running = _generating
-        _generating = True
-
-    if not already_running:
-        def _run():
-            global _generating
-            try:
-                started = time.time()
-                log("생성", f"{date.today().isoformat()} 시작" + (" (다시 생성)" if force else ""))
-                with _keep_awake(), _watch_for_sleep():
-                    data = _build_today_data()
-                    save_cache(data)
-                log("생성", _result_line(data, started))
-            except MachineSlept as e:
-                # 캐시를 저장하지 않으므로 다음 확인(daily_autogen_loop, 최대 30분)이나
-                # 다음 접속 때 처음부터 다시 만든다. 절반만 된 브리핑을 남기는 것보다,
-                # 깨어 있을 때 12분 만에 온전히 만드는 편이 낫다.
-                log("생성", f"중단: {e} ({(time.time() - started) / 60:.0f}분 진행) -> 다음에 처음부터 다시")
-            except Exception as e:
-                # 실패해도 서버는 안 죽음 - _generating만 풀어주면 다음 새로고침 때 재시도됨
-                log("생성", f"실패, 다음 요청에서 재시도: {type(e).__name__}: {e}")
-            finally:
-                with _generation_lock:
-                    _generating = False
-
-        threading.Thread(target=_run, daemon=True).start()
-    return None
+    GENERATE_HOUR 전이면 오늘 것을 만들 때가 아직 아니고, 자정은 지났으니 대상은
+    '어제'다. 며칠 맥을 안 켜다가 새벽 2시에 켜면 어제 것을 만들고, 오늘 것은 7시
+    이후에 만든다. 그보다 오래된 날은 대상이 아니다 - 하루 통째로 안 켠 날은 그냥
+    지나간다(뒤늦게 만들어봐야 그날의 프론트 페이지는 이미 사라졌다)."""
+    now = now or datetime.now()
+    day = now.date() - timedelta(days=1) if now.hour < GENERATE_HOUR else now.date()
+    return day.isoformat()
 
 
-def before_generate_hour():
-    """아직 자동 생성을 시작할 시각이 아닌가. 화면에서 '생성 중'과 '예정'을 구분하는 데도 쓴다."""
-    return datetime.now().hour < GENERATE_HOUR
+def before_generate_hour(now=None):
+    """아직 오늘 것을 만들 시각이 아닌가. 화면에서 '생성 중'과 '예정'을 구분하는 데 쓴다."""
+    return (now or datetime.now()).hour < GENERATE_HOUR
+
+
+def generating_day():
+    """지금 만들고 있는 날짜. 아무것도 안 만들고 있으면 None."""
+    return _generating_day
 
 
 def is_generating():
-    return _generating
+    return _generating_day is not None
+
+
+def can_generate(day):
+    """그 날짜를 지금 만들어도 되는가. 오늘과 대상일만 허용한다 - 사흘 전 날짜를 지금
+    만들면 오늘의 뉴스가 그날짜로 저장되는 꼴이라 거짓이 된다."""
+    return day in {date.today().isoformat(), target_day()}
+
+
+def ensure_briefing_started(day=None, force=False):
+    """논블로킹(HTTP 핸들러용). 대상 날짜 캐시가 있으면 반환, 없으면 백그라운드로
+    생성을 시작하고 None을 반환한다 -> 호출부는 '생성 중' 페이지를 바로 보여줄 수 있다.
+
+    force는 사람이 '다시 생성'을 누른 경우다. 시각 제한과 재시도 간격을 모두 건너뛴다."""
+    day = day or target_day()
+    if not force:
+        cached = load_cache_for_date(day)
+        if cached is not None:
+            return cached
+        if not can_generate(day):
+            return None
+        # 방금 실패한 날짜를 10분 주기로 계속 다시 시도하면 크롤링과 쿼터만 태운다.
+        # 한 번 실패하면 잠시 쉬었다 다시 본다.
+        last = _last_failure.get(day)
+        if last and time.time() - last < RETRY_AFTER_FAILURE:
+            return None
+
+    global _generating_day
+    with _generation_lock:
+        if _generating_day is not None:  # 이미 뭔가 만드는 중이면 겹쳐 돌리지 않는다
+            return None
+        _generating_day = day
+
+    def _run():
+        global _generating_day
+        started = time.time()
+        try:
+            log("생성", f"{day} 시작" + (" (다시 생성)" if force else ""))
+            with _keep_awake(), _watch_for_sleep():
+                data = _build_data(day)
+                save_cache(data)
+            _last_failure.pop(day, None)
+            log("생성", _result_line(data, started))
+        except MachineSlept as e:
+            # 캐시를 저장하지 않으므로 다음 확인 때 처음부터 다시 만든다. 절반만 된
+            # 브리핑을 남기는 것보다, 깨어 있을 때 온전히 만드는 편이 낫다.
+            _last_failure[day] = time.time()
+            log("생성", f"중단: {e} ({(time.time() - started) / 60:.0f}분 진행) -> 다음에 처음부터 다시")
+        except Exception as e:
+            _last_failure[day] = time.time()
+            log("생성", f"{day} 실패, {RETRY_AFTER_FAILURE // 60}분 뒤 재시도: {type(e).__name__}: {e}")
+        finally:
+            with _generation_lock:
+                _generating_day = None
+
+    threading.Thread(target=_run, daemon=True).start()
+    return None
 
 
 def daily_autogen_loop():
-    """서버가 떠 있으면 아무도 접속 안 해도 그날 캐시를 알아서 만든다.
-    GENERATE_HOUR 이후에만 시작하고, 이미 있거나 생성 중이면 아무것도 안 하는 가벼운 체크.
-    맥이 그 시각에 꺼져 있었어도 켜진 뒤 첫 확인 때(또는 서버가 뜰 때) 돈다."""
+    """서버가 떠 있으면 아무도 접속 안 해도 대상 날짜 브리핑을 알아서 만든다.
+    맥이 꺼져 있었거나 자고 있었어도, 켜진 뒤 첫 확인 때(또는 서버가 뜰 때) 돈다."""
     while True:
         time.sleep(AUTOGEN_INTERVAL)
         try:
-            ensure_today_cache_started()
+            ensure_briefing_started()
         except Exception as e:
             log("생성", f"자동 생성 체크 중 오류(다음 주기에 재시도): {e}")

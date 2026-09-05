@@ -48,6 +48,9 @@ FETCH_WORKERS = 6
 GENERATE_HOUR = 7
 # 자동 생성 조건을 확인하는 주기(초). 맥을 깨운 뒤 이 시간 안에 시작된다.
 AUTOGEN_INTERVAL = 600
+# 생성이 실패하거나 중단된 날짜를 다시 시도하기까지 쉬는 시간(초). 없으면 확인 주기마다
+# 계속 재시도해서 크롤링과 쿼터만 태운다.
+RETRY_AFTER_FAILURE = 1800
 
 
 def log(tag, msg):
