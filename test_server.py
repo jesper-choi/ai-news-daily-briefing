@@ -18,29 +18,36 @@ def reset():
     llm._model_exhausted.clear()
 
 
+def tier(i):
+    """i번째 티어의 모델 이름들. 모델을 갈아끼워도 테스트가 안 깨지게 이름을 여기서 뽑는다
+    (검사하려는 건 특정 모델이 아니라 '위 티어를 먼저 쓴다'는 규칙 자체)."""
+    return [m for m, _ in llm.MODEL_TIERS[i]]
+
+
 def test_top_tier_first():
     """1티어에 쿼터가 남아 있으면 절대 아래 티어로 안 내려감."""
     reset()
     for _ in range(5):
         model, _ = llm._next_model(TODAY)
-        assert model == "gemini-3.7-flash", model
+        assert model in tier(0), model
         llm._model_last_call[model] = 0.0  # 페이싱은 지났다고 가정
 
 
 def test_falls_through_exhausted_tiers():
     reset()
-    llm._model_exhausted["gemini-3.7-flash"] = TODAY
-    assert llm._next_model(TODAY)[0] == "gemini-3.6-flash"
-    llm._model_exhausted["gemini-3.6-flash"] = TODAY
-    llm._model_exhausted["gemini-3.5-flash"] = TODAY
-    assert llm._next_model(TODAY)[0].endswith("-lite")
+    for m in tier(0):
+        llm._model_exhausted[m] = TODAY
+    assert llm._next_model(TODAY)[0] in tier(1)
+    for m in tier(1):
+        llm._model_exhausted[m] = TODAY
+    assert llm._next_model(TODAY)[0] in tier(2)
 
 
 def test_skip_moves_to_next_tier():
     """503처럼 일시적 실패로 skip된 모델이 1티어에 하나뿐일 때 아래 티어로 내려가야 함
     (안 그러면 그 모델만 계속 다시 뽑혀서 무한 재시도)."""
     reset()
-    assert llm._next_model(TODAY, {"gemini-3.7-flash"})[0] == "gemini-3.6-flash"
+    assert llm._next_model(TODAY, set(tier(0)))[0] in tier(1)
 
 
 def test_call_tally_per_day_and_model():
