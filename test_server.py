@@ -9,7 +9,7 @@ import shutil
 import time
 from datetime import datetime
 
-from briefing import diagrams, llm, service, sources, summarize
+from briefing import diagrams, llm, service, sources, summarize, web
 
 TODAY = "2026-01-01"
 
@@ -404,6 +404,16 @@ def test_only_one_generation_at_a_time():
     finally:
         service.threading.Thread = real
         service._generating_day = None
+
+
+def test_generated_label_shows_date_when_it_differs():
+    """새벽에 전날 것을 만드는 경우가 있어서(target_day), 시각만 보이면 그 날짜의
+    시각으로 읽혀 오해를 준다. 날짜가 다르면 날짜까지 붙인다."""
+    assert web.generated_label("2026-09-05", "2026-09-05T09:10:33") == "09:10 생성"
+    assert web.generated_label("2026-09-05", "2026-09-06T02:15:04") == "09-06 02:15 생성"
+    # generated_at이 없거나 깨진 옛 캐시에서도 페이지가 죽으면 안 된다
+    assert web.generated_label("2026-09-05", None) == ""
+    assert web.generated_label("2026-09-05", "깨진값") == ""
 
 
 def test_no_model_left():
