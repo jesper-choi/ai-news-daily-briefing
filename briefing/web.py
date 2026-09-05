@@ -2,7 +2,7 @@
 import html
 import re
 import urllib.parse
-from datetime import date
+from datetime import date, datetime
 from http.server import BaseHTTPRequestHandler
 
 from .repository import available_dates, load_cache_for_date
@@ -235,6 +235,22 @@ CSS = """  :root {
 FAVICON = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2NCIgaGVpZ2h0PSI2NCIgdmlld0JveD0iMCAwIDY0IDY0Ij4KPHJlY3QgeD0iMyIgeT0iMyIgd2lkdGg9IjU4IiBoZWlnaHQ9IjU4IiByeD0iMTQiIGZpbGw9IiNmZmZkZjgiIHN0cm9rZT0iI2U2ZTBkMiIgc3Ryb2tlLXdpZHRoPSIyIi8+Cjx0ZXh0IHg9IjI3IiB5PSI0NiIgZm9udC1mYW1pbHk9Ikdlb3JnaWEsICdJb3dhbiBPbGQgU3R5bGUnLCAnUGFsYXRpbm8gTGlub3R5cGUnLCBzZXJpZiIgZm9udC1zdHlsZT0iaXRhbGljIiBmb250LXdlaWdodD0iNzAwIiBmb250LXNpemU9IjQwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjMmY1ZDhhIj5BPC90ZXh0Pgo8Y2lyY2xlIGN4PSI0NSIgY3k9IjE2IiByPSI1IiBmaWxsPSIjZTA3OTNhIi8+Cjwvc3ZnPgo="
 
 
+def generated_label(day_str, generated_at):
+    """'언제 만들어졌나'를 사람이 읽을 문구로. 브리핑 날짜와 다른 날에 만들어졌으면
+    날짜까지 붙인다 - 새벽에 전날 것을 만드는 경우가 있어서(target_day), 시각만
+    보이면 그 날짜의 시각으로 읽혀 오해를 준다.
+
+    generated_at이 없거나 형식이 깨진 옛 캐시에서도 페이지가 죽으면 안 되므로
+    파싱 실패는 조용히 빈 문자열."""
+    try:
+        made = datetime.fromisoformat(generated_at)
+    except (TypeError, ValueError):
+        return ""
+    if made.date().isoformat() == day_str:
+        return made.strftime("%H:%M 생성")
+    return made.strftime("%m-%d %H:%M 생성")
+
+
 def date_picker_html(selected, available):
     # available은 '캐시 파일이 실제로 있는 날짜'라서 생성 중인 오늘자는 빠져 있음.
     # 오늘자는 항상 목록에 넣어야 함 - 예전엔 selected일 때만 합성해서 넣는 바람에,
@@ -333,7 +349,7 @@ def render_html(day_str, available, data, generating=False, regenerating=False, 
         </section>""")
         body = "".join(sections_html)
         item_count = sum(len(s["items"]) for s in data["sections"])
-        generated_at = data["generated_at"][11:16]
+        generated_at = generated_label(day_str, data.get("generated_at"))
 
     return f"""<!doctype html>
 <html lang="ko">
@@ -357,7 +373,7 @@ def render_html(day_str, available, data, generating=False, regenerating=False, 
       </div>
     </div>
     <h1>AI Daily Briefing</h1>
-    <p>{day_str}{f' · 총 {item_count}개 · {generated_at} 생성' if data else ''}</p>
+    <p>{day_str}{f' · 총 {item_count}개' if data else ''}{f' · {generated_at}' if generated_at else ''}</p>
   </header>
   <main>{body}</main>
   <footer>GeekNews · Hacker News 기반 · Gemini로 생성한 원문 요약</footer>
