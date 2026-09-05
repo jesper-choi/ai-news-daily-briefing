@@ -103,22 +103,26 @@ def _result_line(data, started):
 
 
 @contextmanager
-
-
 def _keep_awake():
-    """생성이 도는 동안 맥이 유휴 절전에 들어가지 않게 잡아둔다.
+    """생성이 도는 동안 맥이 자지 않게 잡아둔다.
 
     자정 직후 자동 생성이 도는데 그때 맥은 대개 자고 있다. 자면 프로세스가 통째로
     얼어붙고 진행 중이던 HTTPS 연결이 끊겨서, 깨어난 뒤 ReadTimeout이나
-    'Connection reset by peer'로 그 요약이 날아간다. 실제로 10분이면 끝날 생성이
-    잠들었다 깨기를 반복하며 9시간 넘게 절반만 진행된 적이 있음. 요청 타임아웃으로는
-    못 막는다 - 프로세스가 멈춰 있는 동안엔 타이머도 같이 멈추니까.
+    'Connection reset by peer'로 그 요약이 날아간다. 실제로 12분이면 끝날 생성이
+    잠들었다 깨기를 반복하며 11시간 걸린 날이 있었다. 요청 타임아웃으로는 못 막는다 -
+    프로세스가 멈춰 있는 동안엔 타이머도 같이 멈추니까.
 
-    -i는 유휴 절전만 막는다(뚜껑을 덮으면 어차피 잔다). -w로 서버 pid를 물려두면
-    서버가 죽었을 때 caffeinate가 혼자 남아 맥을 계속 깨워두는 일이 없다.
+    -i는 유휴 절전만 막지만 -s는 시스템 절전 자체를 막는다(단 전원 연결 시에만 유효).
+    -w로 서버 pid를 물려두면 서버가 죽었을 때 caffeinate가 혼자 남아 맥을 계속
+    깨워두는 일이 없다.
+
+    뚜껑을 덮는 경우(clamshell)까지 막으려면 root 권한이 필요한
+    `pmset -a disablesleep 1`뿐이다. 그건 시스템 전역·영구 설정이라 켜둔 채 가방에
+    넣으면 계속 돌아 발열이 생긴다 -> 코드에서 임의로 켜지 않는다(README 참고).
     """
     try:
-        proc = subprocess.Popen(["caffeinate", "-i", "-w", str(os.getpid())])
+        proc = subprocess.Popen(["caffeinate", "-i", "-s", "-w", str(os.getpid())])
+        log("생성", f"절전 방지 시작 ({_power_source()})")
     except OSError as e:  # 맥이 아니거나 caffeinate가 없으면 그냥 진행
         log("생성", f"절전 방지를 걸지 못했어요(생성은 계속): {e}")
         proc = None
@@ -127,6 +131,17 @@ def _keep_awake():
     finally:
         if proc is not None:
             proc.terminate()
+
+
+def _power_source():
+    """전원 연결 여부. -s 어설션은 AC일 때만 유효해서, 생성이 오래 걸린 날 배터리였는지를
+    로그로 구분할 수 있어야 한다."""
+    try:
+        out = subprocess.run(["/usr/bin/pmset", "-g", "batt"],
+                             capture_output=True, text=True, timeout=5).stdout
+        return "AC 전원" if "AC Power" in out else "배터리 - 시스템 절전은 못 막음"
+    except Exception:
+        return "전원 상태 불명"
 
 
 def ensure_today_cache_started(force=False):
