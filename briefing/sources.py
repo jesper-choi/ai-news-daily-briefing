@@ -71,6 +71,7 @@ def fetch_top20(n=CANDIDATE_N):
         })
     return items
 
+
 def fetch_hn_top(n=CANDIDATE_N):
     resp = _get_listing(HN_URL)
     soup = BeautifulSoup(resp.text, "html.parser")
@@ -95,6 +96,7 @@ def fetch_hn_top(n=CANDIDATE_N):
         })
     return items
 
+
 def _beehiiv_post_meta(url):
     """포스트 페이지의 JSON-LD에서 (발행일, 제목, 설명)을 뽑는다. 실패하면 None.
     beehiiv는 RSS를 안 주고 목록 페이지에도 날짜가 없어서 글마다 한 번씩 열어봐야 함."""
@@ -110,6 +112,7 @@ def _beehiiv_post_meta(url):
     except Exception:  # 글 하나 못 읽었다고 뉴스레터 섹션 전체를 날리지 않는다
         return None
     return None
+
 
 def fetch_newsletter_recent(days=NEWSLETTER_DAYS, scan=NEWSLETTER_SCAN):
     """AI Engineering 뉴스레터에서 최근 days일 안에 나온 글만 가져온다.
@@ -158,6 +161,7 @@ _BOT_WALL_MARKERS = (
     "sign in to", "log in to", "subscribe to continue", "cookies to continue",
 )
 
+
 def fetch_article_text(url, max_chars=ARTICLE_MAX_CHARS):
     """원문 기사 본문을 최선을 다해 추출. 실패하면 None (호출부에서 excerpt로 대체)."""
     try:
@@ -185,6 +189,7 @@ def fetch_article_text(url, max_chars=ARTICLE_MAX_CHARS):
         log("출처", f"본문 추출 실패({url[:60]}): {type(e).__name__}: {str(e)[:60]}")
         return None
 
+
 def fetch_geeknews_topic(discuss_url, max_chars=ARTICLE_MAX_CHARS):
     """GeekNews 토픽 페이지의 자체 한국어 요약을 가져온다. 원문이 봇 차단/유튜브 등으로
     막혔을 때의 대체 소스 - 목록 excerpt는 이 요약의 첫 줄만 잘라온 거라 90자뿐이지만,
@@ -204,6 +209,7 @@ def fetch_geeknews_topic(discuss_url, max_chars=ARTICLE_MAX_CHARS):
     except Exception as e:  # 위 fetch_article_text와 같은 이유로 넓게 잡는다
         log("출처", f"토픽 페이지 실패({discuss_url[:60]}): {type(e).__name__}: {str(e)[:60]}")
         return None
+
 
 def fetch_source_text(item):
     """요약에 쓸 본문을 구한다. 원문 -> (GeekNews면) 토픽 페이지 요약 순으로 시도.

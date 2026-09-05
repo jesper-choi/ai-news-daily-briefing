@@ -84,6 +84,155 @@ MERMAID_SCRIPT = """
   }
 </script>"""
 
+# 페이지 CSS. render_html이 f-string이라 여기에 두지 않으면 중괄호를 전부 이중으로
+# 써야 한다(예전엔 63군데). 스타일을 고칠 때마다 걸려 넘어지던 자리라 밖으로 뺐다.
+CSS = """  :root {
+    --bg: #f7f4ed; --card: #fffdf8; --text: #2b2820; --muted: #837a68;
+    --border: #e6e0d2; --accent: #2f5d8a; --accent-soft: #dde7f0;
+    /* 본문 폭. 다이어그램이 들어가면서 700px로는 너무 좁아 축소/스크롤이 잦았음 */
+    --page: 1180px; --page-pad: 1.25rem;
+    --font-serif: Georgia, "Iowan Old Style", "Palatino Linotype", "Noto Serif KR", serif;
+    --font-sans: -apple-system, BlinkMacSystemFont, "Pretendard", "Apple SD Gothic Neo", "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #191611; --card: #201c15; --text: #ece6d8; --muted: #a89d86;
+      --border: #363024; --accent: #7fb0e0; --accent-soft: #1e2c3a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: var(--font-sans); line-height: 1.7; -webkit-font-smoothing: antialiased;
+  }
+  header {
+    max-width: var(--page); margin: 0 auto; padding: 3.5rem var(--page-pad) 2.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .eyebrow-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+  .header-controls { display: flex; align-items: center; gap: .5rem; }
+  .btn-regenerate {
+    font-family: var(--font-sans); font-size: .8rem; color: var(--text); background: var(--card);
+    border: 1px solid var(--border); border-radius: 8px; padding: .4rem .6rem; cursor: pointer;
+    text-decoration: none; white-space: nowrap;
+  }
+  .btn-regenerate:hover { border-color: var(--accent); color: var(--accent); }
+  .eyebrow {
+    display: block; font-size: .75rem; font-weight: 700; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--accent); margin-bottom: .9rem;
+  }
+  .date-picker {
+    font-family: var(--font-sans); font-size: .8rem; color: var(--text); background: var(--card);
+    border: 1px solid var(--border); border-radius: 8px; padding: .4rem .6rem; cursor: pointer;
+  }
+  header h1 {
+    font-family: var(--font-serif); font-style: italic; font-weight: 500;
+    font-size: clamp(2rem, 5vw, 2.75rem); margin: 0 0 .8rem; letter-spacing: -.01em; color: var(--text);
+  }
+  header p { margin: 0; color: var(--muted); font-size: .92rem; }
+  main { max-width: var(--page); margin: 0 auto; padding: .5rem var(--page-pad) 6rem; }
+  .empty { padding: 4rem 0; text-align: center; color: var(--muted); font-size: 1rem; }
+  .generating { padding: 5rem 0; text-align: center; }
+  .pulse-dots { display: flex; justify-content: center; gap: .5rem; margin-bottom: 1.6rem; }
+  .pulse-dots span {
+    width: .65rem; height: .65rem; border-radius: 50%; background: var(--accent);
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+  .pulse-dots span:nth-child(2) { animation-delay: .2s; }
+  .pulse-dots span:nth-child(3) { animation-delay: .4s; }
+  @keyframes pulse {
+    0%, 80%, 100% { opacity: .25; transform: scale(.7); }
+    40% { opacity: 1; transform: scale(1); }
+  }
+  .generating p { margin: 0 0 .6rem; font-size: 1.05rem; color: var(--text); }
+  .generating .hint { font-size: .85rem; color: var(--muted); line-height: 1.6; }
+  .source-section + .source-section { margin-top: 1rem; }
+  .source-label {
+    font-family: var(--font-sans); font-size: .78rem; font-weight: 700; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--muted); margin: 0; padding: 1.5rem 0 .5rem;
+    border-top: 2px solid var(--accent);
+  }
+  .source-section:first-child .source-label { border-top: none; padding-top: 0; }
+  .entry { padding: 3rem 0; border-bottom: 1px solid var(--border); }
+  .entry:last-child { border-bottom: none; }
+  .index {
+    font-family: var(--font-serif); font-size: .95rem; font-weight: 700; color: var(--accent);
+    margin: 0 0 .7rem; letter-spacing: .04em;
+  }
+  .entry h3 {
+    font-family: var(--font-serif); font-weight: 500; font-size: 1.55rem; line-height: 1.4;
+    margin: 0 0 .8rem; color: var(--text);
+  }
+  .meta {
+    display: flex; align-items: center; gap: .5rem; margin-bottom: 1.3rem; flex-wrap: wrap;
+    font-size: .78rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted);
+  }
+  .meta .dot { opacity: .5; }
+  .badge-thin {
+    padding: .1rem .45rem; border-radius: 4px; border: 1px solid var(--border);
+    background: var(--card); color: var(--muted); cursor: help;
+    font-size: .72rem; letter-spacing: .03em; text-transform: none;
+  }
+  .meta-link { color: var(--muted); text-decoration: none; border-bottom: 1px solid var(--border); }
+  .meta-link:hover { color: var(--accent); border-color: var(--accent); }
+  .abstract { margin: 0 0 1.1rem; font-size: 1.05rem; line-height: 1.8; color: var(--text); }
+  .detail-toggle { margin-bottom: 1.4rem; }
+  .detail-toggle summary {
+    cursor: pointer; user-select: none; font-size: .85rem; font-weight: 700; color: var(--accent);
+    list-style: none; display: inline-flex; align-items: center; gap: .35rem;
+    letter-spacing: .03em; text-transform: uppercase;
+  }
+  .detail-toggle summary::-webkit-details-marker { display: none; }
+  .detail-toggle summary::after { content: "→"; transition: transform .15s ease; }
+  .detail-toggle[open] summary::after { transform: rotate(90deg); }
+  .detail-text {
+    margin-top: 1.3rem; padding: 0 0 0 1.3rem; border-left: 3px solid var(--accent-soft);
+    font-size: 1rem; line-height: 1.85; color: var(--text);
+  }
+  .detail-text p { margin: 0 0 1.15rem; }
+  .detail-text p:last-child { margin-bottom: 0; }
+  /* d2 그림은 자기 캔버스(회색/검정 판)를 갖고 나온다 -> 여기서 배경·테두리를 또
+     주면 판이 이중으로 겹친다. 모서리만 둥글게 깎고 나머지는 SVG에 맡긴다. */
+  .diagram {
+    margin: 1.4rem 0; border-radius: 14px; overflow: hidden;
+    overflow-x: auto;  /* 넓은 다이어그램이 본문을 밀어내지 않게 */
+  }
+  /* 옛 mermaid 캐시는 캔버스가 없으니 예전처럼 카드 배경을 준다 */
+  .diagram:has(pre.mermaid) { padding: 1.1rem; background: var(--card); border: 1px solid var(--border); }
+  .diagram pre.mermaid { margin: 0; text-align: center; font-family: var(--font-sans); }
+  /* max-width를 풀어야 넓은 다이어그램이 축소되지 않고 원래 크기로 그려진다
+     (넘치는 만큼은 .diagram의 overflow-x로 스크롤). 좁은 건 auto 마진으로 가운데. */
+  .diagram svg { max-width: none; height: auto; display: block; margin: 0 auto; }
+  /* 라이트/다크용 SVG가 한 쌍으로 들어있고 여기서 하나만 보여준다 */
+  .d2-dark { display: none; }
+  .d2-light { display: block; }
+  @media (prefers-color-scheme: dark) {
+    .d2-light { display: none; }
+    .d2-dark { display: block; }
+  }
+  .detail-close {
+    margin-top: 1.1rem; padding: .45rem 1rem; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--card); color: var(--muted);
+    font-family: var(--font-sans); font-size: .8rem; font-weight: 700; cursor: pointer;
+    letter-spacing: .03em;
+  }
+  .detail-close:hover { border-color: var(--accent); color: var(--accent); }
+  .actions { display: flex; }
+  .btn-primary {
+    display: inline-flex; align-items: center; gap: .4rem; padding: .6rem 1.3rem;
+    border-radius: 8px; background: var(--accent); color: #fff9f2; text-decoration: none;
+    font-size: .85rem; font-weight: 700; transition: opacity .15s ease;
+  }
+  .btn-primary:hover { opacity: .85; }
+  footer {
+    max-width: var(--page); margin: 0 auto; padding: 0 var(--page-pad) 4rem; text-align: center;
+    color: var(--muted); font-size: .8rem;
+  }"""
+
+# 문서 아이콘(SVG를 data URI로). 본문에 그대로 두면 템플릿이 안 읽힌다.
+FAVICON = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2NCIgaGVpZ2h0PSI2NCIgdmlld0JveD0iMCAwIDY0IDY0Ij4KPHJlY3QgeD0iMyIgeT0iMyIgd2lkdGg9IjU4IiBoZWlnaHQ9IjU4IiByeD0iMTQiIGZpbGw9IiNmZmZkZjgiIHN0cm9rZT0iI2U2ZTBkMiIgc3Ryb2tlLXdpZHRoPSIyIi8+Cjx0ZXh0IHg9IjI3IiB5PSI0NiIgZm9udC1mYW1pbHk9Ikdlb3JnaWEsICdJb3dhbiBPbGQgU3R5bGUnLCAnUGFsYXRpbm8gTGlub3R5cGUnLCBzZXJpZiIgZm9udC1zdHlsZT0iaXRhbGljIiBmb250LXdlaWdodD0iNzAwIiBmb250LXNpemU9IjQwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjMmY1ZDhhIj5BPC90ZXh0Pgo8Y2lyY2xlIGN4PSI0NSIgY3k9IjE2IiByPSI1IiBmaWxsPSIjZTA3OTNhIi8+Cjwvc3ZnPgo="
+
+
 def date_picker_html(selected, available):
     # available은 '캐시 파일이 실제로 있는 날짜'라서 생성 중인 오늘자는 빠져 있음.
     # 오늘자는 항상 목록에 넣어야 함 - 예전엔 selected일 때만 합성해서 넣는 바람에,
@@ -98,6 +247,7 @@ def date_picker_html(selected, available):
         for d in dates
     )
     return f"""<select class="date-picker" onchange="location.href='/?date='+this.value">{options}</select>"""
+
 
 def render_html(day_str, available, data, generating=False, regenerating=False):
     refresh_tag = '<meta http-equiv="refresh" content="6">' if generating else ""
@@ -179,151 +329,10 @@ def render_html(day_str, available, data, generating=False, regenerating=False):
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AI Daily Briefing · {day_str}</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2NCIgaGVpZ2h0PSI2NCIgdmlld0JveD0iMCAwIDY0IDY0Ij4KPHJlY3QgeD0iMyIgeT0iMyIgd2lkdGg9IjU4IiBoZWlnaHQ9IjU4IiByeD0iMTQiIGZpbGw9IiNmZmZkZjgiIHN0cm9rZT0iI2U2ZTBkMiIgc3Ryb2tlLXdpZHRoPSIyIi8+Cjx0ZXh0IHg9IjI3IiB5PSI0NiIgZm9udC1mYW1pbHk9Ikdlb3JnaWEsICdJb3dhbiBPbGQgU3R5bGUnLCAnUGFsYXRpbm8gTGlub3R5cGUnLCBzZXJpZiIgZm9udC1zdHlsZT0iaXRhbGljIiBmb250LXdlaWdodD0iNzAwIiBmb250LXNpemU9IjQwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjMmY1ZDhhIj5BPC90ZXh0Pgo8Y2lyY2xlIGN4PSI0NSIgY3k9IjE2IiByPSI1IiBmaWxsPSIjZTA3OTNhIi8+Cjwvc3ZnPgo=">
+<link rel="icon" type="image/svg+xml" href="{FAVICON}">
 {refresh_tag}
 <style>
-  :root {{
-    --bg: #f7f4ed; --card: #fffdf8; --text: #2b2820; --muted: #837a68;
-    --border: #e6e0d2; --accent: #2f5d8a; --accent-soft: #dde7f0;
-    /* 본문 폭. 다이어그램이 들어가면서 700px로는 너무 좁아 축소/스크롤이 잦았음 */
-    --page: 1180px; --page-pad: 1.25rem;
-    --font-serif: Georgia, "Iowan Old Style", "Palatino Linotype", "Noto Serif KR", serif;
-    --font-sans: -apple-system, BlinkMacSystemFont, "Pretendard", "Apple SD Gothic Neo", "Segoe UI", sans-serif;
-  }}
-  @media (prefers-color-scheme: dark) {{
-    :root {{
-      --bg: #191611; --card: #201c15; --text: #ece6d8; --muted: #a89d86;
-      --border: #363024; --accent: #7fb0e0; --accent-soft: #1e2c3a;
-    }}
-  }}
-  * {{ box-sizing: border-box; }}
-  body {{
-    margin: 0; background: var(--bg); color: var(--text);
-    font-family: var(--font-sans); line-height: 1.7; -webkit-font-smoothing: antialiased;
-  }}
-  header {{
-    max-width: var(--page); margin: 0 auto; padding: 3.5rem var(--page-pad) 2.5rem;
-    border-bottom: 1px solid var(--border);
-  }}
-  .eyebrow-row {{ display: flex; align-items: center; justify-content: space-between; gap: 1rem; }}
-  .header-controls {{ display: flex; align-items: center; gap: .5rem; }}
-  .btn-regenerate {{
-    font-family: var(--font-sans); font-size: .8rem; color: var(--text); background: var(--card);
-    border: 1px solid var(--border); border-radius: 8px; padding: .4rem .6rem; cursor: pointer;
-    text-decoration: none; white-space: nowrap;
-  }}
-  .btn-regenerate:hover {{ border-color: var(--accent); color: var(--accent); }}
-  .eyebrow {{
-    display: block; font-size: .75rem; font-weight: 700; letter-spacing: .14em;
-    text-transform: uppercase; color: var(--accent); margin-bottom: .9rem;
-  }}
-  .date-picker {{
-    font-family: var(--font-sans); font-size: .8rem; color: var(--text); background: var(--card);
-    border: 1px solid var(--border); border-radius: 8px; padding: .4rem .6rem; cursor: pointer;
-  }}
-  header h1 {{
-    font-family: var(--font-serif); font-style: italic; font-weight: 500;
-    font-size: clamp(2rem, 5vw, 2.75rem); margin: 0 0 .8rem; letter-spacing: -.01em; color: var(--text);
-  }}
-  header p {{ margin: 0; color: var(--muted); font-size: .92rem; }}
-  main {{ max-width: var(--page); margin: 0 auto; padding: .5rem var(--page-pad) 6rem; }}
-  .empty {{ padding: 4rem 0; text-align: center; color: var(--muted); font-size: 1rem; }}
-  .generating {{ padding: 5rem 0; text-align: center; }}
-  .pulse-dots {{ display: flex; justify-content: center; gap: .5rem; margin-bottom: 1.6rem; }}
-  .pulse-dots span {{
-    width: .65rem; height: .65rem; border-radius: 50%; background: var(--accent);
-    animation: pulse 1.2s ease-in-out infinite;
-  }}
-  .pulse-dots span:nth-child(2) {{ animation-delay: .2s; }}
-  .pulse-dots span:nth-child(3) {{ animation-delay: .4s; }}
-  @keyframes pulse {{
-    0%, 80%, 100% {{ opacity: .25; transform: scale(.7); }}
-    40% {{ opacity: 1; transform: scale(1); }}
-  }}
-  .generating p {{ margin: 0 0 .6rem; font-size: 1.05rem; color: var(--text); }}
-  .generating .hint {{ font-size: .85rem; color: var(--muted); line-height: 1.6; }}
-  .source-section + .source-section {{ margin-top: 1rem; }}
-  .source-label {{
-    font-family: var(--font-sans); font-size: .78rem; font-weight: 700; letter-spacing: .12em;
-    text-transform: uppercase; color: var(--muted); margin: 0; padding: 1.5rem 0 .5rem;
-    border-top: 2px solid var(--accent);
-  }}
-  .source-section:first-child .source-label {{ border-top: none; padding-top: 0; }}
-  .entry {{ padding: 3rem 0; border-bottom: 1px solid var(--border); }}
-  .entry:last-child {{ border-bottom: none; }}
-  .index {{
-    font-family: var(--font-serif); font-size: .95rem; font-weight: 700; color: var(--accent);
-    margin: 0 0 .7rem; letter-spacing: .04em;
-  }}
-  .entry h3 {{
-    font-family: var(--font-serif); font-weight: 500; font-size: 1.55rem; line-height: 1.4;
-    margin: 0 0 .8rem; color: var(--text);
-  }}
-  .meta {{
-    display: flex; align-items: center; gap: .5rem; margin-bottom: 1.3rem; flex-wrap: wrap;
-    font-size: .78rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted);
-  }}
-  .meta .dot {{ opacity: .5; }}
-  .badge-thin {{
-    padding: .1rem .45rem; border-radius: 4px; border: 1px solid var(--border);
-    background: var(--card); color: var(--muted); cursor: help;
-    font-size: .72rem; letter-spacing: .03em; text-transform: none;
-  }}
-  .meta-link {{ color: var(--muted); text-decoration: none; border-bottom: 1px solid var(--border); }}
-  .meta-link:hover {{ color: var(--accent); border-color: var(--accent); }}
-  .abstract {{ margin: 0 0 1.1rem; font-size: 1.05rem; line-height: 1.8; color: var(--text); }}
-  .detail-toggle {{ margin-bottom: 1.4rem; }}
-  .detail-toggle summary {{
-    cursor: pointer; user-select: none; font-size: .85rem; font-weight: 700; color: var(--accent);
-    list-style: none; display: inline-flex; align-items: center; gap: .35rem;
-    letter-spacing: .03em; text-transform: uppercase;
-  }}
-  .detail-toggle summary::-webkit-details-marker {{ display: none; }}
-  .detail-toggle summary::after {{ content: "→"; transition: transform .15s ease; }}
-  .detail-toggle[open] summary::after {{ transform: rotate(90deg); }}
-  .detail-text {{
-    margin-top: 1.3rem; padding: 0 0 0 1.3rem; border-left: 3px solid var(--accent-soft);
-    font-size: 1rem; line-height: 1.85; color: var(--text);
-  }}
-  .detail-text p {{ margin: 0 0 1.15rem; }}
-  .detail-text p:last-child {{ margin-bottom: 0; }}
-  /* d2 그림은 자기 캔버스(회색/검정 판)를 갖고 나온다 -> 여기서 배경·테두리를 또
-     주면 판이 이중으로 겹친다. 모서리만 둥글게 깎고 나머지는 SVG에 맡긴다. */
-  .diagram {{
-    margin: 1.4rem 0; border-radius: 14px; overflow: hidden;
-    overflow-x: auto;  /* 넓은 다이어그램이 본문을 밀어내지 않게 */
-  }}
-  /* 옛 mermaid 캐시는 캔버스가 없으니 예전처럼 카드 배경을 준다 */
-  .diagram:has(pre.mermaid) {{ padding: 1.1rem; background: var(--card); border: 1px solid var(--border); }}
-  .diagram pre.mermaid {{ margin: 0; text-align: center; font-family: var(--font-sans); }}
-  /* max-width를 풀어야 넓은 다이어그램이 축소되지 않고 원래 크기로 그려진다
-     (넘치는 만큼은 .diagram의 overflow-x로 스크롤). 좁은 건 auto 마진으로 가운데. */
-  .diagram svg {{ max-width: none; height: auto; display: block; margin: 0 auto; }}
-  /* 라이트/다크용 SVG가 한 쌍으로 들어있고 여기서 하나만 보여준다 */
-  .d2-dark {{ display: none; }}
-  .d2-light {{ display: block; }}
-  @media (prefers-color-scheme: dark) {{
-    .d2-light {{ display: none; }}
-    .d2-dark {{ display: block; }}
-  }}
-  .detail-close {{
-    margin-top: 1.1rem; padding: .45rem 1rem; border-radius: 8px;
-    border: 1px solid var(--border); background: var(--card); color: var(--muted);
-    font-family: var(--font-sans); font-size: .8rem; font-weight: 700; cursor: pointer;
-    letter-spacing: .03em;
-  }}
-  .detail-close:hover {{ border-color: var(--accent); color: var(--accent); }}
-  .actions {{ display: flex; }}
-  .btn-primary {{
-    display: inline-flex; align-items: center; gap: .4rem; padding: .6rem 1.3rem;
-    border-radius: 8px; background: var(--accent); color: #fff9f2; text-decoration: none;
-    font-size: .85rem; font-weight: 700; transition: opacity .15s ease;
-  }}
-  .btn-primary:hover {{ opacity: .85; }}
-  footer {{
-    max-width: var(--page); margin: 0 auto; padding: 0 var(--page-pad) 4rem; text-align: center;
-    color: var(--muted); font-size: .8rem;
-  }}
+{CSS}
 </style>
 </head>
 <body>
@@ -343,6 +352,7 @@ def render_html(day_str, available, data, generating=False, regenerating=False):
   {MERMAID_SCRIPT if 'class="mermaid"' in body else ''}
 </body>
 </html>"""
+
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):

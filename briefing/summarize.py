@@ -4,7 +4,18 @@ import re
 
 from .config import PICK_N, log
 from .diagrams import bake_diagrams, strip_diagrams
-from .llm import _gemini_call, gemini
+from .llm import gemini, generate
+
+SUMMARY_FAILED_MSG = "요약을 생성하지 못했어요. 잠시 후 '다시 생성'을 눌러주세요."
+# 답은 번호 몇 개뿐이지만 thinking 모델은 내부 추론에도 이 예산을 쓴다. 좁히면
+# 생각하다 예산이 끝나 빈 응답이 온다.
+SELECT_TOKENS = 4000
+SUMMARY_TOKENS = 16000
+# 이 길이 미만이면 '본문을 못 가져온 것'으로 보고 짧게 쓰게 한다. 예전엔 소스가 몇
+# 줄이든 장문을 요구해서 모델이 제목만 보고 지어낸 글이 나왔다(82자 -> 3000자).
+LONG_SOURCE_CHARS = 1000
+# 마커가 없을 때 앞부분을 잘라 abstract로 쓰는 길이
+ABSTRACT_FALLBACK_CHARS = 180
 
 
 def _split_summary(text):
@@ -12,8 +23,11 @@ def _split_summary(text):
     m = re.search(r"\[ABSTRACT\]\s*(.*?)\s*\[DETAIL\]\s*(.*)", text, re.S)
     if m:
         return m.group(1).strip(), m.group(2).strip()
-    abstract = text[:180].rsplit(" ", 1)[0] + "…" if len(text) > 180 else text
+    if len(text) > ABSTRACT_FALLBACK_CHARS:
+        return text[:ABSTRACT_FALLBACK_CHARS].rsplit(" ", 1)[0] + "…", text
+    abstract = text
     return abstract, text
+
 
 def select_ai_related(items, n=PICK_N):
     """items를 AI 관련성 순으로 정렬시켜 상위 n개만 골라 반환 (Gemini 판단).
@@ -33,9 +47,7 @@ def select_ai_related(items, n=PICK_N):
         f"순위를 매겨서 상위 {n}개의 번호만 답해줘. 설명 없이 번호만 쉼표로 구분해서. 예: 3, 1, 7, 12, 5"
     )
     try:
-        # 답 자체는 번호 몇 개라 짧지만, thinking을 쓰는 모델은 내부 reasoning에도 이
-        # 예산을 씀 -> 200으로 조이면 생각하다 예산이 끝나 빈 응답이 옴. 넉넉히 잡아둠.
-        text = _gemini_call(prompt, max_output_tokens=4000)
+        text = generate(prompt, max_output_tokens=SELECT_TOKENS)
     except Exception as e:
         # 선별에 실패하면 AI 관련성과 무관하게 목록 앞에서 n개를 자른다. 조용히 넘어가면
         # 그날 섹션이 왜 엉뚱한 글로 찼는지 나중에 알 방법이 없어서 남긴다.
@@ -134,11 +146,8 @@ def summarize_ko(item, article_text):
         return {"abstract": msg, "detail": msg}
 
     source = article_text or item["excerpt"] or item["title"]
-    # 소스가 얼마나 되는지에 따라 요구 분량을 맞춘다. 예전엔 소스가 몇 줄이든 무조건
-    # "4500~9000자"를 요구해서, 본문을 못 가져온 기사는 모델이 제목만 보고 지어낸 긴
-    # 글이 나왔음(82자 excerpt -> 3000자 요약 같은 식). 소스가 얇으면 짧게 쓰게 하고
-    # 창작을 명시적으로 금지하는 게 맞음.
-    if len(source) >= 1000:
+    # 소스 분량에 따라 요구 분량을 맞춘다 (LONG_SOURCE_CHARS 주석 참고)
+    if len(source) >= LONG_SOURCE_CHARS:
         detail_spec = (
             "A4 용지 4~6장 분량(한국어 기준 약 4500~9000자)의 아주 상세한 요약. 배경과 맥락, "
             "핵심 내용을 항목별로 풍부하게, 구체적인 근거·수치·인용·사례, 관련 배경지식, "
@@ -166,7 +175,7 @@ def summarize_ko(item, article_text):
         "본문만 작성하고, '더 필요하신가요?' 같은 되묻는 말이나 인사말 등 대화체 멘트는 절대 넣지 마."
     )
     try:
-        abstract, detail = _split_summary(_gemini_call(prompt, max_output_tokens=16000))
+        abstract, detail = _split_summary(generate(prompt, max_output_tokens=SUMMARY_TOKENS))
         # d2 코드를 여기서 바로 SVG로 구워 캐시에 넣는다. 페이지를 열 때마다 컴파일하면
         # 다이어그램 45개짜리 하루치가 매 요청마다 몇 초씩 걸림.
         # abstract는 카드에 한 줄로 들어가는 자리라 그림이 오면 안 된다. 모델이 거기까지
@@ -177,5 +186,3 @@ def summarize_ko(item, article_text):
         # 그랬음) -> 사람이 읽을 짧은 문구만 남기고 원인은 서버 로그로 보냄
         log("요약", f"실패 ({item['title'][:50]}): {type(e).__name__}: {str(e)[:80]}")
         return {"abstract": SUMMARY_FAILED_MSG, "detail": SUMMARY_FAILED_MSG}
-
-SUMMARY_FAILED_MSG = "요약을 생성하지 못했어요. 잠시 후 '다시 생성'을 눌러주세요."
