@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from datetime import date, datetime
 from typing import NamedTuple
 
-from .config import AUTOGEN_INTERVAL, FETCH_WORKERS, NEWSLETTER_DAYS, log
+from .config import AUTOGEN_INTERVAL, FETCH_WORKERS, GENERATE_HOUR, NEWSLETTER_DAYS, log
 
 # 맥이 잔 걸 알아채는 방법: 감시 스레드가 SLEEP_TICK초마다 깨어나 시계를 본다.
 # 그 사이 SLEEP_GAP초 넘게 흘렀으면 프로세스가 그동안 얼어 있었다는 뜻이다
@@ -196,6 +196,11 @@ def ensure_today_cache_started(force=False):
         cached = load_cache_for_date(today)
         if cached is not None:
             return cached
+        # 아직 이른 시간이면 시작하지 않는다. 자정 직후엔 맥이 자고 있어서 생성이
+        # 잠들었다 깨기를 반복하며 몇 시간씩 걸렸다. 지금 당장 보고 싶으면 '다시
+        # 생성'(force=True)이 있다.
+        if before_generate_hour():
+            return None
 
     global _generating
     with _generation_lock:
@@ -228,13 +233,19 @@ def ensure_today_cache_started(force=False):
     return None
 
 
+def before_generate_hour():
+    """아직 자동 생성을 시작할 시각이 아닌가. 화면에서 '생성 중'과 '예정'을 구분하는 데도 쓴다."""
+    return datetime.now().hour < GENERATE_HOUR
+
+
 def is_generating():
     return _generating
 
 
 def daily_autogen_loop():
-    """서버가 계속 떠 있으면, 아무도 접속 안 해도 날짜가 바뀌는 순간(자정 이후) 알아서
-    그날 캐시 생성을 시작해준다. 이미 있거나 생성 중이면 그냥 아무것도 안 하는 가벼운 체크."""
+    """서버가 떠 있으면 아무도 접속 안 해도 그날 캐시를 알아서 만든다.
+    GENERATE_HOUR 이후에만 시작하고, 이미 있거나 생성 중이면 아무것도 안 하는 가벼운 체크.
+    맥이 그 시각에 꺼져 있었어도 켜진 뒤 첫 확인 때(또는 서버가 뜰 때) 돈다."""
     while True:
         time.sleep(AUTOGEN_INTERVAL)
         try:

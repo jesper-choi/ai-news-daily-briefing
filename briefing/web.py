@@ -6,7 +6,8 @@ from datetime import date
 from http.server import BaseHTTPRequestHandler
 
 from .repository import available_dates, load_cache_for_date
-from .service import ensure_today_cache_started, is_generating
+from .config import GENERATE_HOUR
+from .service import before_generate_hour, ensure_today_cache_started, is_generating
 
 
 def _text_paragraphs(text):
@@ -249,9 +250,19 @@ def date_picker_html(selected, available):
     return f"""<select class="date-picker" onchange="location.href='/?date='+this.value">{options}</select>"""
 
 
-def render_html(day_str, available, data, generating=False, regenerating=False):
-    refresh_tag = '<meta http-equiv="refresh" content="6">' if generating else ""
-    if generating:
+def render_html(day_str, available, data, generating=False, regenerating=False, waiting=False):
+    # 대기 화면은 몇 시간을 켜둘 수도 있으니 6초마다 새로고침할 이유가 없다
+    refresh_tag = ('<meta http-equiv="refresh" content="300">' if waiting
+                   else '<meta http-equiv="refresh" content="6">' if generating else "")
+    if waiting:
+        body = f"""
+        <div class="generating">
+          <p>오늘 브리핑은 아침 {GENERATE_HOUR}시부터 만들어요</p>
+          <p class="hint">자정에 만들면 맥이 자는 동안 생성이 자꾸 끊겨서, 맥을 쓰는 시간대로 옮겼어요.<br>
+          그 시각에 맥이 꺼져 있었다면 켜진 뒤 곧 시작해요. 지금 바로 보고 싶으면 위의 "↻ 다시 생성"을 눌러주세요.</p>
+        </div>"""
+        item_count, generated_at = 0, ""
+    elif generating:
         title = "다시 생성하고 있어요…" if regenerating else "오늘의 브리핑을 만들고 있어요…"
         body = f"""
         <div class="generating">
@@ -383,9 +394,13 @@ class Handler(BaseHTTPRequestHandler):
         # 캐시가 그대로 남아있어서 data가 None이 아님 -> data is None만 보면 재생성 중인데도
         # "생성 중" 표시가 안 뜨고 그냥 옛 페이지가 그대로 보여서 눌렀는지 알 수 없었음.
         generating = day_str == today_str and (data is None or is_generating())
+        # 7시 전엔 아직 시작도 안 한 상태다. 이때 '생성 중' 화면을 6초마다 새로고침하며
+        # 보여주면 영영 안 끝나는 것처럼 보이므로, 언제 만들어지는지 알려주는 화면을 띄운다.
+        waiting = generating and not is_generating() and before_generate_hour()
 
         out = render_html(
-            day_str, available_dates(), data, generating=generating, regenerating=generating and data is not None
+            day_str, available_dates(), data, generating=generating,
+            regenerating=generating and data is not None, waiting=waiting,
         ).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
