@@ -301,6 +301,38 @@ def test_sleep_watch_detects_time_jump():
         service._slept.clear()
 
 
+def test_waits_until_generate_hour():
+    """자정에 돌리면 맥이 자는 동안 생성이 끊긴다 -> GENERATE_HOUR 전에는 시작하지 않고,
+    그 시각이 지났거나 사람이 '다시 생성'을 누르면(force) 바로 시작한다."""
+    started = []
+    real_thread, real_load, real_now = service.threading.Thread, service.load_cache_for_date, service.datetime
+    service.load_cache_for_date = lambda d: None          # 오늘 캐시 없음
+    service.threading.Thread = lambda **kw: type("T", (), {"start": lambda s: started.append(1)})()
+
+    class FakeNow:
+        hour = 3
+        @classmethod
+        def now(cls): return cls
+    service.datetime = FakeNow
+    try:
+        service._generating = False
+        assert service.before_generate_hour(), "새벽 3시는 대기여야"
+        service.ensure_today_cache_started()
+        assert started == [], "이른 시간인데 생성을 시작했음"
+
+        service.ensure_today_cache_started(force=True)    # 사람이 누르면 시각 무관
+        assert len(started) == 1, "force인데 시작 안 함"
+
+        service._generating = False
+        FakeNow.hour = 7                                  # GENERATE_HOUR 도달
+        assert not service.before_generate_hour()
+        service.ensure_today_cache_started()
+        assert len(started) == 2, "7시가 지났는데 시작 안 함"
+    finally:
+        service.threading.Thread, service.load_cache_for_date, service.datetime = real_thread, real_load, real_now
+        service._generating = False
+
+
 def test_no_model_left():
     reset()
     for model, _ in llm.MODELS:
