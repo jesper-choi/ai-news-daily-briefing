@@ -33,7 +33,7 @@ MODELS = [m for tier in MODEL_TIERS for m in tier]
 
 # 타임아웃이 없으면 응답이 안 오는 소켓에서 read()로 영영 블록된다. 실제로 그 상태로
 # 17시간을 매달려 있었고, _generating이 True로 잡힌 채라 "생성 중" 화면에서 못 빠져나오고
-# 자동 재시도(_daily_autogen_loop)도 계속 no-op이 됐음. 끊기면 _gemini_call이 다음
+# 자동 재시도(daily_autogen_loop)도 계속 no-op이 됐음. 끊기면 _gemini_call이 다음
 # 모델로 넘어가니 넉넉하게만 잡아주면 됨. (단위: ms)
 GEMINI_TIMEOUT_MS = 240_000
 
@@ -48,6 +48,7 @@ gemini = (
 _model_last_call = {}  # model -> 마지막 호출 시각(epoch)
 
 _model_exhausted = {}  # model -> 일일 쿼터가 소진된 날짜(YYYY-MM-DD)
+
 
 def _next_model(today, skip=()):
     """쓸 모델을 고른다. 위 티어(품질 우선)에 아직 쿼터가 남아있으면 절대 아래 티어로
@@ -72,6 +73,7 @@ def _next_model(today, skip=()):
 # 넣어두면 자정을 넘겨도 어제 값과 안 섞이고, 프로세스가 며칠씩 떠 있어도 그대로 맞음.
 _model_calls = {}  # (날짜, 모델) -> [성공, 실패]
 
+
 def _err_note(e):
     """429를 로그에서 구분할 수 있게 quotaId를 뽑는다. 그냥 앞 80자를 자르면 JSON
     껍데기만 찍히고 정작 중요한 'PerDay(하루치 소진, 자정까지 못 씀)'냐
@@ -82,6 +84,7 @@ def _err_note(e):
     found = re.search(r"""['"]quotaId['"]:\s*['"]([^'"]+)['"]""", msg)
     return found.group(1) if found else msg[:80]
 
+
 def _log_call(today, model, started, status, note):
     """LLM 호출 한 건을 한 줄로 남긴다. 프롬프트/응답 본문은 안 남기고 걸린 시간과
     성공 여부만. menubar.log에서 `grep '\\[gemini\\]'`로 하루치를 훑어볼 수 있음."""
@@ -90,7 +93,8 @@ def _log_call(today, model, started, status, note):
     ok, fail = tally
     log("gemini", f"{model} {time.time() - started:5.1f}s {status:4} (오늘 성공 {ok} 실패 {fail}) {note}")
 
-def _gemini_call(prompt, max_output_tokens=16000):
+
+def generate(prompt, max_output_tokens=16000):
     """여러 모델을 번갈아 쓰며 호출. 모델별 페이싱/일일 쿼터 소진/일시적 오류를 알아서
     처리하고 텍스트를 반환. 쓸 수 있는 모델이 다 떨어지면 마지막 예외를 던짐."""
     today = date.today().isoformat()

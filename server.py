@@ -13,7 +13,7 @@ import threading
 from http.server import ThreadingHTTPServer
 
 from briefing.config import API_KEY, PORT, log
-from briefing.service import _daily_autogen_loop, ensure_today_cache_started
+from briefing.service import daily_autogen_loop, ensure_today_cache_started
 from briefing.web import Handler
 
 __all__ = ["PORT", "start_server", "main"]
@@ -31,7 +31,7 @@ def start_server():
     log("서버", f"http://localhost:{PORT} 서비스 시작 (오늘자 캐시가 없으면 즉시 자동 생성, "
                 f"날짜가 바뀌어도 서버가 떠 있으면 다음날 것도 자동 생성)")
     ensure_today_cache_started()  # 접속 안 해도 서버 켜지자마자 바로 생성 시작
-    threading.Thread(target=_daily_autogen_loop, daemon=True).start()
+    threading.Thread(target=daily_autogen_loop, daemon=True).start()
     return httpd
 
 

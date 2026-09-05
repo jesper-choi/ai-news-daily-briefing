@@ -10,7 +10,7 @@ from datetime import date, datetime
 from typing import NamedTuple
 
 from .config import AUTOGEN_INTERVAL, FETCH_WORKERS, NEWSLETTER_DAYS, log
-from .repository import _save_cache, load_cache_for_date
+from .repository import save_cache, load_cache_for_date
 from .sources import fetch_hn_top, fetch_newsletter_recent, fetch_source_text, fetch_top20
 from .summarize import SUMMARY_FAILED_MSG, select_ai_related, summarize_ko
 
@@ -50,6 +50,7 @@ def build_section(items):
         item["summary_source"] = source_kind
     return items
 
+
 def _fetch_source(label, fetch):
     """소스 하나를 가져온다. 그 소스가 죽어 있으면 빈 리스트로 계속 진행한다 - 예전엔
     GeekNews가 502만 나도 예외가 그대로 올라가 그날 브리핑이 통째로 안 만들어졌음.
@@ -61,6 +62,7 @@ def _fetch_source(label, fetch):
     except Exception as e:
         log("출처", f"{label} 수집 실패 -> 이 섹션은 비우고 진행: {type(e).__name__}: {str(e)[:80]}")
         return []
+
 
 def _build_today_data():
     """오늘자 데이터를 실제로 크롤링+요약해서 만든다 (몇 분 걸림). 디스크에 쓰지 않고 반환만."""
@@ -89,6 +91,7 @@ _generation_lock = threading.Lock()
 
 _generating = False
 
+
 def _result_line(data, started):
     """생성 한 번의 결과를 한 줄로. '오늘치가 제대로 나왔나'를 이 줄 하나로 판단할 수
     있어야 함 - 요약이 몇 개 비었는지가 핵심이고, 그게 0이 아니면 다시 생성할 신호."""
@@ -98,7 +101,10 @@ def _result_line(data, started):
     return (f"{data['date']} 완료 {(time.time() - started) / 60:.1f}분 | {sections} | "
             f"항목 {len(items)} 요약실패 {failed}")
 
+
 @contextmanager
+
+
 def _keep_awake():
     """생성이 도는 동안 맥이 유휴 절전에 들어가지 않게 잡아둔다.
 
@@ -121,6 +127,7 @@ def _keep_awake():
     finally:
         if proc is not None:
             proc.terminate()
+
 
 def ensure_today_cache_started(force=False):
     """논블로킹(HTTP 핸들러용): 오늘 캐시가 있으면 반환. 없으면(또는 force=True로 재생성
@@ -145,7 +152,7 @@ def ensure_today_cache_started(force=False):
                 log("생성", f"{date.today().isoformat()} 시작" + (" (다시 생성)" if force else ""))
                 with _keep_awake():
                     data = _build_today_data()
-                    _save_cache(data)
+                    save_cache(data)
                 log("생성", _result_line(data, started))
             except Exception as e:
                 # 실패해도 서버는 안 죽음 - _generating만 풀어주면 다음 새로고침 때 재시도됨
@@ -157,10 +164,12 @@ def ensure_today_cache_started(force=False):
         threading.Thread(target=_run, daemon=True).start()
     return None
 
+
 def is_generating():
     return _generating
 
-def _daily_autogen_loop():
+
+def daily_autogen_loop():
     """서버가 계속 떠 있으면, 아무도 접속 안 해도 날짜가 바뀌는 순간(자정 이후) 알아서
     그날 캐시 생성을 시작해준다. 이미 있거나 생성 중이면 그냥 아무것도 안 하는 가벼운 체크."""
     while True:

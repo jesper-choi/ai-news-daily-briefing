@@ -93,10 +93,10 @@ def render_d2(code):
     return light, dark
 
 
-# ponytail: SVG마다 서브셋 폰트가 따로 들어가서 그림 하나에 20~30KB. 하루치 40여 개면
-# 페이지가 1MB쯤 되는데 localhost라 체감이 없어 그냥 둔다. 무거워지면 폰트를 페이지에
-# 한 번만 넣고 SVG에선 빼는 쪽으로.
 def bake_diagrams(text):
+    # ponytail: SVG마다 서브셋 폰트가 따로 들어가서 그림 하나에 20~30KB. 하루치 40여 개면
+    # 페이지가 1MB쯤 되는데 localhost라 체감이 없어 그냥 둔다. 무거워지면 폰트를 페이지에
+    # 한 번만 넣고 SVG에선 빼는 쪽으로.
     """요약 본문의 ```d2 블록을 전부 ```d2svg(완성된 SVG)로 바꿔서 돌려준다.
     컴파일이 안 되는 블록은 통째로 지운다 - 코드가 그대로 노출되는 것보단 낫다."""
     def replace(m):

@@ -9,10 +9,12 @@ from .config import CACHE_DIR
 def cache_path(day_str):
     return os.path.join(CACHE_DIR, f"{day_str}.json")
 
+
 def available_dates():
     """캐시가 존재하는 날짜(YYYY-MM-DD) 목록, 최신순."""
     files = glob.glob(cache_path("*"))
     return sorted((os.path.splitext(os.path.basename(f))[0] for f in files), reverse=True)
+
 
 def load_cache_for_date(day_str):
     """해당 날짜 캐시가 파일로 존재하면 로드, 없으면 None (오늘 캐시 생성은 다루지 않음 -
@@ -23,7 +25,8 @@ def load_cache_for_date(day_str):
             return json.load(f)
     return None
 
-def _save_cache(data):
+
+def save_cache(data):
     os.makedirs(CACHE_DIR, exist_ok=True)
     path = cache_path(data["date"])
     tmp = path + ".tmp"
