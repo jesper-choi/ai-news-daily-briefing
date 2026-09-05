@@ -7,7 +7,8 @@ from http.server import BaseHTTPRequestHandler
 
 from .repository import available_dates, load_cache_for_date
 from .config import GENERATE_HOUR
-from .service import before_generate_hour, ensure_today_cache_started, is_generating
+from .service import (before_generate_hour, can_generate, ensure_briefing_started,
+                      generating_day, target_day)
 
 
 def _text_paragraphs(text):
@@ -379,24 +380,29 @@ class Handler(BaseHTTPRequestHandler):
         # validate format so a bad ?date= can't be used for path traversal into cache_path()
         day_str = requested if requested and re.fullmatch(r"\d{4}-\d{2}-\d{2}", requested) else today_str
 
-        if query.get("regenerate", [None])[0] and day_str == today_str:
-            ensure_today_cache_started(force=True)
+        # 다시 생성은 '지금 만들어도 말이 되는 날짜'에만 허용한다. 사흘 전 날짜로 누르면
+        # 오늘의 뉴스가 그날짜로 저장돼 거짓이 된다.
+        if query.get("regenerate", [None])[0] and can_generate(day_str):
+            ensure_briefing_started(day_str, force=True)
             self.send_response(302)
             self.send_header("Location", f"/?date={today_str}")
             self.end_headers()
             return
 
-        if day_str == today_str:
-            data = ensure_today_cache_started()  # non-blocking: None while still generating
+        # 지금 만들 차례인 날짜를 열었을 때만 생성을 건다. 그 외 날짜는 파일만 읽는다.
+        if day_str == target_day():
+            data = ensure_briefing_started()  # non-blocking: None while still generating
         else:
             data = load_cache_for_date(day_str)
-        # is_generating()도 확인해야 하는 이유: 재생성 중엔 새 캐시가 저장되기 전까지 옛
-        # 캐시가 그대로 남아있어서 data가 None이 아님 -> data is None만 보면 재생성 중인데도
-        # "생성 중" 표시가 안 뜨고 그냥 옛 페이지가 그대로 보여서 눌렀는지 알 수 없었음.
-        generating = day_str == today_str and (data is None or is_generating())
-        # 7시 전엔 아직 시작도 안 한 상태다. 이때 '생성 중' 화면을 6초마다 새로고침하며
-        # 보여주면 영영 안 끝나는 것처럼 보이므로, 언제 만들어지는지 알려주는 화면을 띄운다.
-        waiting = generating and not is_generating() and before_generate_hour()
+        # generating_day()로 보는 이유: 재생성 중엔 새 캐시가 저장되기 전까지 옛 캐시가
+        # 남아 있어서 data가 None이 아님 -> data만 보면 눌렀는지 알 수 없었음. 또 새벽에
+        # 어제 것을 만드는 중일 수도 있어서, '어느 날짜를' 만드는 중인지가 필요하다.
+        generating = generating_day() == day_str or (day_str == target_day() and data is None)
+        # 오늘 것을 7시 전에 열면 아직 시작조차 안 한 상태다. '생성 중' 화면을 6초마다
+        # 새로고침하며 보여주면 영영 안 끝나는 것처럼 보이므로 예정 화면을 띄운다.
+        waiting = (day_str == today_str and data is None
+                   and generating_day() != day_str and before_generate_hour())
+        generating = generating or waiting
 
         out = render_html(
             day_str, available_dates(), data, generating=generating,

@@ -13,7 +13,7 @@ import threading
 from http.server import ThreadingHTTPServer
 
 from briefing.config import API_KEY, PORT, log
-from briefing.service import daily_autogen_loop, ensure_today_cache_started
+from briefing.service import daily_autogen_loop, ensure_briefing_started
 from briefing.web import Handler
 
 __all__ = ["PORT", "start_server", "main"]
@@ -28,9 +28,8 @@ def start_server():
     if not API_KEY:
         log("경고", "GOOGLE_API_KEY가 설정되지 않았습니다. .env에 GOOGLE_API_KEY=... 를 넣어주세요.")
     httpd = ThreadingHTTPServer(("localhost", PORT), Handler)
-    log("서버", f"http://localhost:{PORT} 서비스 시작 (오늘자 캐시가 없으면 즉시 자동 생성, "
-                f"날짜가 바뀌어도 서버가 떠 있으면 다음날 것도 자동 생성)")
-    ensure_today_cache_started()  # 접속 안 해도 서버 켜지자마자 바로 생성 시작
+    log("서버", f"http://localhost:{PORT} 서비스 시작")
+    ensure_briefing_started()  # 맥을 켜자마자 확인 - 대상 날짜가 비었으면 바로 시작
     threading.Thread(target=daily_autogen_loop, daemon=True).start()
     return httpd
 

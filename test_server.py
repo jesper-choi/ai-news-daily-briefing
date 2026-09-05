@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import time
+from datetime import datetime
 
 from briefing import diagrams, llm, service, sources, summarize
 
@@ -239,9 +240,10 @@ def test_sources_registry_dedupes_and_picks():
     real_sources, real_build = service.SOURCES, service.build_section
     service.SOURCES, service.build_section = fake, lambda items: items
     try:
-        data = service._build_today_data()
+        data = service._build_data("2026-09-06")
     finally:
         service.SOURCES, service.build_section = real_sources, real_build
+    assert data["date"] == "2026-09-06", "시작할 때 정한 날짜를 그대로 써야 함"
     assert [s["key"] for s in data["sections"]] == ["first", "second"]
     assert [s["label"] for s in data["sections"]] == ["첫 소스", "둘째 소스"]
     assert len(data["sections"][0]["items"]) == 1
@@ -301,36 +303,107 @@ def test_sleep_watch_detects_time_jump():
         service._slept.clear()
 
 
-def test_waits_until_generate_hour():
-    """자정에 돌리면 맥이 자는 동안 생성이 끊긴다 -> GENERATE_HOUR 전에는 시작하지 않고,
-    그 시각이 지났거나 사람이 '다시 생성'을 누르면(force) 바로 시작한다."""
-    started = []
-    real_thread, real_load, real_now = service.threading.Thread, service.load_cache_for_date, service.datetime
-    service.load_cache_for_date = lambda d: None          # 오늘 캐시 없음
-    service.threading.Thread = lambda **kw: type("T", (), {"start": lambda s: started.append(1)})()
+def test_target_day_rules():
+    """지금 만들어져 있어야 할 브리핑의 날짜. 7시 전이면 아직 오늘 것을 만들 때가 아니고
+    자정은 지났으니 대상은 어제다(며칠 만에 새벽 2시에 켠 경우가 이것)."""
+    for when, expect in [("2026-09-06 06:59", "2026-09-05"),   # 7시 직전 -> 어제
+                         ("2026-09-06 07:00", "2026-09-06"),   # 7시 정각 -> 오늘
+                         ("2026-09-06 02:00", "2026-09-05"),   # 새벽 -> 어제
+                         ("2026-09-06 23:59", "2026-09-06"),   # 밤 -> 오늘
+                         ("2026-09-01 00:01", "2026-08-31")]:  # 월 경계
+        got = service.target_day(datetime.fromisoformat(when))
+        assert got == expect, f"{when} -> {got} (기대 {expect})"
 
-    class FakeNow:
-        hour = 3
-        @classmethod
-        def now(cls): return cls
-    service.datetime = FakeNow
+
+def _frozen(service_mod, when):
+    """service 안의 시계를 고정한다. (date.today()와 datetime.now() 둘 다 쓴다)"""
+    moment = datetime.fromisoformat(when)
+    return (type("D", (), {"today": staticmethod(lambda: moment.date())}),
+            type("T", (), {"now": staticmethod(lambda: moment)}))
+
+
+def test_generation_schedule_scenarios():
+    """맥을 언제 켜느냐에 따라 무엇을 만들어야 하는지."""
+    have = set()          # 이미 캐시가 있는 날짜
+    started = []          # 생성을 시작한 날짜
+    real = (service.date, service.datetime, service.threading.Thread, service.load_cache_for_date)
+    service.load_cache_for_date = lambda d: {"date": d} if d in have else None
+    service.threading.Thread = lambda **kw: type("T", (), {
+        "start": lambda s: (started.append(service._generating_day), setattr(service, "_generating_day", None))})()
     try:
-        service._generating = False
-        assert service.before_generate_hour(), "새벽 3시는 대기여야"
-        service.ensure_today_cache_started()
-        assert started == [], "이른 시간인데 생성을 시작했음"
-
-        service.ensure_today_cache_started(force=True)    # 사람이 누르면 시각 무관
-        assert len(started) == 1, "force인데 시작 안 함"
-
-        service._generating = False
-        FakeNow.hour = 7                                  # GENERATE_HOUR 도달
-        assert not service.before_generate_hour()
-        service.ensure_today_cache_started()
-        assert len(started) == 2, "7시가 지났는데 시작 안 함"
+        cases = [
+            # (시각, 이미 있는 날짜, 기대 시작 날짜, 설명)
+            ("2026-09-06 09:00", set(), "2026-09-06", "7시 이후 처음 켰다 -> 오늘 것"),
+            ("2026-09-06 14:30", set(), "2026-09-06", "오후에 켜도 오늘 것"),
+            ("2026-09-06 09:00", {"2026-09-06"}, None, "이미 있으면 아무것도 안 함"),
+            ("2026-09-06 02:00", set(), "2026-09-05", "며칠 만에 새벽 2시 -> 어제 것"),
+            ("2026-09-06 02:00", {"2026-09-05"}, None, "어제 것이 있으면 7시까지 대기"),
+            ("2026-09-06 06:59", set(), "2026-09-05", "7시 직전까지는 어제 것"),
+            ("2026-09-06 23:59", set(), "2026-09-06", "자정 직전에도 오늘 것"),
+        ]
+        for when, existing, expect, why in cases:
+            have.clear(); have.update(existing); started.clear()
+            service._generating_day = None; service._last_failure.clear()
+            service.date, service.datetime = _frozen(service, when)
+            service.ensure_briefing_started()
+            got = started[0] if started else None
+            assert got == expect, f"{why}: {when} -> {got} (기대 {expect})"
     finally:
-        service.threading.Thread, service.load_cache_for_date, service.datetime = real_thread, real_load, real_now
-        service._generating = False
+        service.date, service.datetime, service.threading.Thread, service.load_cache_for_date = real
+        service._generating_day = None; service._last_failure.clear()
+
+
+def test_force_ignores_schedule_and_backoff():
+    """'다시 생성'은 사람이 직접 누른 것이라 시각 제한도 재시도 간격도 건너뛴다."""
+    started = []
+    real = (service.date, service.datetime, service.threading.Thread, service.load_cache_for_date)
+    service.load_cache_for_date = lambda d: {"date": d}          # 캐시가 이미 있어도
+    service.threading.Thread = lambda **kw: type("T", (), {
+        "start": lambda s: (started.append(service._generating_day), setattr(service, "_generating_day", None))})()
+    service.date, service.datetime = _frozen(service, "2026-09-06 03:00")   # 새벽인데도
+    try:
+        service._generating_day = None
+        service._last_failure["2026-09-06"] = time.time()        # 방금 실패했어도
+        service.ensure_briefing_started("2026-09-06", force=True)
+        assert started == ["2026-09-06"], started
+    finally:
+        service.date, service.datetime, service.threading.Thread, service.load_cache_for_date = real
+        service._generating_day = None; service._last_failure.clear()
+
+
+def test_failure_backs_off_before_retry():
+    """실패한 날짜를 10분 주기마다 다시 시도하면 크롤링과 쿼터만 태운다."""
+    started = []
+    real = (service.threading.Thread, service.load_cache_for_date)
+    service.load_cache_for_date = lambda d: None
+    service.threading.Thread = lambda **kw: type("T", (), {
+        "start": lambda s: (started.append(service._generating_day), setattr(service, "_generating_day", None))})()
+    try:
+        day = service.target_day()
+        service._generating_day = None
+        service._last_failure[day] = time.time()      # 방금 실패
+        service.ensure_briefing_started()
+        assert started == [], "실패 직후인데 또 시작했음"
+        service._last_failure[day] = time.time() - service.RETRY_AFTER_FAILURE - 1
+        service.ensure_briefing_started()
+        assert started == [day], f"간격이 지났는데 재시도 안 함: {started}"
+    finally:
+        service.threading.Thread, service.load_cache_for_date = real
+        service._generating_day = None; service._last_failure.clear()
+
+
+def test_only_one_generation_at_a_time():
+    """어제 것을 만드는 중에 7시가 지나도 겹쳐 돌지 않는다."""
+    real = service.threading.Thread
+    service.threading.Thread = lambda **kw: type("T", (), {"start": lambda s: None})()
+    try:
+        service._generating_day = "2026-09-05"        # 이미 어제 것 생성 중
+        assert service.is_generating() and service.generating_day() == "2026-09-05"
+        assert service.ensure_briefing_started("2026-09-06", force=True) is None
+        assert service._generating_day == "2026-09-05", "진행 중인 생성을 덮어씀"
+    finally:
+        service.threading.Thread = real
+        service._generating_day = None
 
 
 def test_no_model_left():
