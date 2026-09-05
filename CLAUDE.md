@@ -45,7 +45,9 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8787/
 - **`print`에 `flush=True`가 없으면 로그가 안 보인다.** launchd가 stdout을 파일로 받으면
   블록 버퍼링이라 몇 시간씩 안 나타남. 항상 `config.log(tag, msg)`를 쓸 것.
 - **맥이 자면 생성이 깨진다.** 프로세스가 얼어붙고 진행 중이던 HTTPS 연결이 끊긴다.
-  요청 타임아웃으로는 못 막는다(멈춘 동안 타이머도 멈춤) → `service._keep_awake()`.
+  요청 타임아웃으로는 못 막는다(멈춘 동안 타이머도 멈춤) → `service._keep_awake()`가
+  `caffeinate -i -s`를 건다. `-s`는 AC 전원일 때만 유효하고, 뚜껑을 덮는 경우는
+  root가 필요한 `pmset -a disablesleep 1`뿐이라 코드에서 켜지 않는다(README 참고).
 - **Gemini 무료 티어는 모델당 RPD 20.** 생성 1회가 22콜이라 한 모델로는 부족하다.
   `llm.MODEL_TIERS`가 품질 순으로 내려가며 쓰고, 하루 소진된 모델은 그날 건너뛴다.
 - **부분 실패는 조용히 지나가면 안 된다.** 소스 하나가 죽어도 나머지는 만들되
